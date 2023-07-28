@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",            
+            "forcedInclude": ["${env:HOME}/cts/root/include/vulkan/vulkan.h"],
+            "includePath": [
+                "${workspaceFolder}/**",
+                "{env:HOME}/cts/root/include"
+            ],
+            "defines": ["VK_ENABLE_BETA_EXTENSIONS"],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64",
+            "compileCommands": "${workspaceFolder}/compile_commands.json"
+        }
+    ],
+    "version": 4
+}

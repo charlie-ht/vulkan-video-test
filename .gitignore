@@ -2,3 +2,6 @@
 **/compile_commands.json
 /src/vd
 /clips/
+vd
+src/.cache
+.cache
