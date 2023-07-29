@@ -18,6 +18,6 @@ fi
 
 $sanitize && cc_args+=( -fsanitize=address )
 
-includes=( -isystem $HOME/cts/root/include -I $HOME/src/openh264/codec/api/wels/ )
+includes=( -isystem $HOME/cts/root/include -I $D/external/VulkanMemoryAllocator/include/ -I $HOME/src/openh264/codec/api/wels/ )
 
-g++ ${cc_args[@]} ${includes[@]} $SRC/main.cpp  -o $D/vd
+bear -- clang++ ${cc_args[@]} ${includes[@]} $SRC/main.cpp $SRC/vk_memory_allocator.cpp -o $D/vd

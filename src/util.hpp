@@ -145,6 +145,19 @@ sized_buffer ReadWholeBinaryFileIntoMemory(const char* inFilename)
     return res;
 }
 
+
+void* MallocZerod(size_t size)
+{
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, 64, size))
+        ptr = nullptr;
+
+    if (ptr)
+        memset(ptr, 0, size);
+
+    return ptr;
+}
+
 void ZeroMemory(void* _src, u32 len);
 void ZeroMemory(void* _src, u32 len)
 {
@@ -229,10 +242,33 @@ inline i32 RoundUp32(i32 a, i32 b)
 inline u64 RDTSC()
 {
     u32 lo, hi;
-    __asm__ __volatile__("rdtsc"
+    __asm__ __volatile__("mfence;lfence;rdtsc"
                          : "=a"(lo), "=d"(hi));
     return static_cast<u64>(hi) << 32 | lo;
 }
+
+class Timer {
+public:
+    void GetCurrentTime()
+    {
+        clock_gettime(CLOCK_MONOTONIC, &start);
+    }
+
+    u64 ElapsedNanoseconds()
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        return (now.tv_sec - start.tv_sec) * 1000000000 + (now.tv_nsec - start.tv_nsec);
+    }
+
+    u64 ElapsedMilliseconds()
+    {
+        u64 ns = ElapsedNanoseconds();
+        return ns / 1000000;
+    }
+private:
+    timespec start;
+};
 
 } // namespace util
 

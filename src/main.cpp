@@ -50,6 +50,7 @@ int main(int argc, char** argv)
             printf("  --input-queue <queue>: input queue\n");
             printf("  --input-buffers <buffers>: input buffers\n");
             printf("  --input-delay\n");
+			exit(0);
         } else if (util::StrHasPrefix(argv[arg], "--device-name=")) {
             requested_device_name = util::StrRemovePrefix(argv[arg], "--device-name=");
 		} else if (util::StrHasPrefix(argv[arg], "--device-major-minor=")) {
@@ -66,7 +67,10 @@ int main(int argc, char** argv)
             enable_validation = true;
         } else if (util::StrEqual(argv[arg], "--detect")) {
             detect_env = true;
-        }
+        } else {
+			XERROR(0, "Unknown flag: %s\n", argv[arg]);
+			exit(1);
+		}
     }
 	vvb::SysVulkan::UserOptions opts;
 	opts.detect_env = detect_env;
@@ -75,11 +79,18 @@ int main(int argc, char** argv)
 	opts.requested_device_major = device_major;
 	opts.requested_device_minor = device_minor;
 
-	vvb::SysVulkan sys_vk(opts);
-    vvb::init_vulkan(sys_vk);
+	vvb::SysVulkan* sys_vk = new vvb::SysVulkan(opts);
+	ASSERT(sys_vk);
+    vvb::init_vulkan(*sys_vk);
+
+
+	
     // parse bitstream
     // allocate picture buffers
     // perform decode algorithm for each AU (**)
     // for each frame, submit decode command
     // wait for frames to decode and present to the screen
+
+	delete sys_vk;
+	return 0;
 }

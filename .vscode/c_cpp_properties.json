@@ -1,18 +1,24 @@
 {
     "configurations": [
         {
-            "name": "Linux",            
-            "forcedInclude": ["${env:HOME}/cts/root/include/vulkan/vulkan.h"],
-            "includePath": [
-                "${workspaceFolder}/**",
-                "{env:HOME}/cts/root/include"
+            "name": "Linux",
+            "forcedInclude": [
+                "${env:HOME}/cts/root/include/vulkan/vulkan.h",
+                "${workspaceFolder}/src/util.hpp"
             ],
-            "defines": ["VK_ENABLE_BETA_EXTENSIONS"],
+            "includePath": [
+                "${workspaceFolder}/third_party/VulkanMemoryAllocator/include",
+                "${env:HOME}/cts/root/include",
+                "${env:HOME}/cts/root/include/vulkan"
+            ],
+            "defines": [
+                "VK_ENABLE_BETA_EXTENSIONS"
+            ],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
-            "cppStandard": "gnu++17",
+            "cppStandard": "c++23",
             "intelliSenseMode": "linux-gcc-x64",
-            "compileCommands": "${workspaceFolder}/compile_commands.json"
+            "configurationProvider": "ms-vscode.cmake-tools"
         }
     ],
     "version": 4

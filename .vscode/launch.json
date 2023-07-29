@@ -8,9 +8,9 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/vd",
+            "program": "${command:cmake.launchTargetPath}",
             // "args": ["-i", "${env:HOME}/video-tests/av1-1-b8-01-size-16x32.ivf", "-c", "1", "--noPresent", "-o", "/tmp/nvidia.yuv"],
-            "args": ["-vulkan", "${env:HOME}/video-tests/basic-8.ivf"],
+            "args": ["--device-name=amd"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/data",
             "environment": [
@@ -54,9 +54,9 @@
             "name": "(lldb) Launch",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/vd",
+            "program": "${command:cmake.launchTargetPath}",
             // "args": ["-i", "${env:HOME}/video-tests/av1-1-b8-01-size-16x32.ivf", "-c", "1", "--noPresent", "-o", "/tmp/nvidia.yuv"],
-            "args": ["--device-major-minor=d2a1.110f", "-vulkan", "${env:HOME}/video-tests/basic-8.ivf"],
+            "args": ["--device-name=amd"],
             "cwd": "${workspaceFolder}/data",
             "env": {
                 // {
@@ -65,10 +65,7 @@
                 //     "name": "VK_ICD_FILENAMES",
                 //     "value": "${env:HOME}/cts/root/share/vulkan/icd.d/radeon_icd.x86_64.json"
                 // },
-                // {
-                //     "name": "RADV_PERFTEST",
-                //     "value": "video_decode"
-                // },
+                "RADV_PERFTEST": "video_decode",
                 // {
                 //     "name": "VK_INSTANCE_LAYERS",
                 //     "value": ":VK_LAYER_LUNARG_gfxreconstruct",

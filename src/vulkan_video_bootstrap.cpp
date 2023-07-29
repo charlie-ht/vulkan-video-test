@@ -1,11 +1,11 @@
 #include <array>
 #include <bit>
-#include <memory>
-#include <vector>
-#include <cstdio>
 #include <cassert>
 #include <cinttypes>
+#include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <vector>
 
 #define LINUX 1
 
@@ -14,6 +14,8 @@
 #ifdef LINUX
 #include <dlfcn.h>
 #endif
+
+#include "vk_mem_alloc.h"
 
 namespace vvb {
 /*
@@ -138,6 +140,16 @@ static const char* vk_ret2str(VkResult res)
     }
 #undef CASE
 }
+
+#define VK_CHECK(x) \
+    do { \
+        VkResult err = x; \
+        if (err) { \
+            printf("Detected Vulkan error: %s (%d)\n", vk_ret2str(err), err); \
+            assert(!err); \
+            exit(1); \
+        } \
+    } while (0)
 
 // {{{ platform code
 
@@ -379,29 +391,13 @@ struct VulkanPhysicalDevicePriv {
 
 class SysVulkan {
 public:
-    struct UserOptions
-    {
-        bool detect_env{false};
-        bool enable_validation{true};
-	    const char* requested_device_name{nullptr};
-        int requested_device_major{-1};
-        int requested_device_minor{-1};
-    } _options;
+    VmaAllocator _allocator;
 
-    SysVulkan(const UserOptions& options)
-        : _options(options)
-    {
-    }
-    SysVulkan(SysVulkan& other) = delete;
-    SysVulkan(SysVulkan&& other) = delete;
-
-    void* _libvulkan { nullptr }; // Library and loader functions
-    VulkanFunctions _vfn;
-    unsigned int extensions;
-
-    // Pointer to instance-provided loading function.
-    u32 padding { 0 };
     PFN_vkGetInstanceProcAddr _get_proc_addr { nullptr };
+    VulkanFunctions _vfn;
+    
+    void* _libvulkan { nullptr }; // Library and loader functions
+    unsigned int extensions;
 
     std::vector<VkLayerProperties> _available_instance_layers;
     VkInstance _instance { VK_NULL_HANDLE };
@@ -410,10 +406,15 @@ public:
     std::vector<VkPhysicalDeviceProperties2> _physical_device_props;
     std::vector<VkPhysicalDeviceIDProperties> _physical_device_id_props;
     std::vector<VkPhysicalDeviceDrmPropertiesEXT> _physical_device_drm_props;
-    size_t _selected_physical_dev_idx{0};
+
+    size_t _selected_physical_dev_idx { 0 };
     VulkanPhysicalDevicePriv _selected_physical_device_priv;
     std::vector<VkExtensionProperties> _selected_device_all_available_extensions;
-    VkPhysicalDevice SelectedPhysicalDevice() const { ASSERT(_physical_devices.size() > 0); return _physical_devices[_selected_physical_dev_idx]; }
+    VkPhysicalDevice SelectedPhysicalDevice() const
+    {
+        ASSERT(_physical_devices.size() > 0);
+        return _physical_devices[_selected_physical_dev_idx];
+    }
 
     /* Settings */
     int dev_is_nvidia;
@@ -423,10 +424,9 @@ public:
     // -- end of physical device settings
 
     /* Queues */
-    std::vector<std::vector<pthread_mutex_t>> qf_mutex;
-    int num_qfs;
-    uint32_t img_qfs[5];
-    int num_image_qfs;
+    std::vector<VkQueueFamilyProperties2> _qf_properties;
+    std::vector<VkQueueFamilyVideoPropertiesKHR> _qf_video_properties;
+    std::vector<std::vector<pthread_mutex_t>> _qf_mutexs;
 
     /**
      * Queue family index for graphics operations, and the number of queues
@@ -474,9 +474,25 @@ public:
     bool _enable_validation { true };
     u32 _debug_level { 1 };
 
+    struct UserOptions {
+        bool detect_env { false };
+        bool enable_validation { true };
+        const char* requested_device_name { nullptr };
+        int requested_device_major { -1 };
+        int requested_device_minor { -1 };
+    } _options;
+
+    SysVulkan(const UserOptions& options)
+        : _options(options)
+    {
+    }
+    SysVulkan(SysVulkan& other) = delete;
+    SysVulkan(SysVulkan&& other) = delete;
     ~SysVulkan()
     {
         auto& vk = _vfn;
+        vmaDestroyAllocator(_allocator);
+
         if (_dev_debug_ctx)
             vk.DestroyDebugUtilsMessengerEXT(_instance, _dev_debug_ctx, nullptr);
 
@@ -493,8 +509,6 @@ public:
             ;
 #endif
     }
-
-    bool is_ready() const { return _libvulkan != nullptr && _instance != VK_NULL_HANDLE && SelectedPhysicalDevice() != VK_NULL_HANDLE && _active_dev != VK_NULL_HANDLE; }
 };
 
 // Helper for robustly executing the two-call pattern
@@ -580,24 +594,32 @@ static void check_device_extensions(SysVulkan& sys_vk, std::vector<const char*>&
     enabled_extensions.clear();
 
     u64 start = util::RDTSC();
+    util::Timer t;
     ASSERT(sys_vk._selected_device_all_available_extensions.empty());
+
+    t.GetCurrentTime();
     get_vector(sys_vk._selected_device_all_available_extensions, vk.EnumerateDeviceExtensionProperties, sys_vk.SelectedPhysicalDevice(), nullptr);
     u64 end = util::RDTSC();
-    fprintf(stderr, "EnumerateDeviceExtensionProperties took %" PRIu64 " cycles\n", end - start);
+    u64 ms = t.ElapsedMilliseconds();
+    fprintf(stderr, "EnumerateDeviceExtensionProperties took %" PRIu64 " ms (%" PRIu64 " cycles)\n", ms, end - start);
     fprintf(stderr, "device extensions:\n");
     int optional_exts_num;
     optional_exts_num = ARRAY_ELEMS(optional_device_exts);
 
     for (const auto& prop : sys_vk._selected_device_all_available_extensions) {
+        bool found = false;
         for (int i = 0; i < optional_exts_num; i++) {
             const char* tstr = optional_device_exts[i].name;
-            if (!strcmp(prop.extensionName, tstr) || !strcmp(prop.extensionName, "VK_KHR_acceleration_structure")) {
+            if (!strcmp(prop.extensionName, tstr)) {
                 enabled_extensions.push_back(tstr);
-                putchar('*');
+                found = true;
                 break;
             }
         }
-        printf("\t%s\n", prop.extensionName);
+        if (found)
+            printf("[ENABLED] %s\n", prop.extensionName);
+        else
+            printf("[       ] %s\n", prop.extensionName);
     }
 }
 
@@ -856,7 +878,7 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     prop.resize(num_devices);
     idp.resize(num_devices);
     drm_prop.resize(num_devices);
-    
+
     for (u32 i = 0; i < num_devices; i++) {
         drm_prop[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
         idp[i].pNext = &drm_prop[i];
@@ -864,20 +886,26 @@ static void choose_and_load_device(SysVulkan& sys_vk)
         prop[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         prop[i].pNext = &idp[i];
         vk.GetPhysicalDeviceProperties2(sys_vk._physical_devices[i], &prop[i]);
-        printf("    %d: %s (%s) (deviceID=0x%x) (primary major/minor 0x%lx/0x%lx render major/minor 0x%lx/0x%lx\n", i,
-        prop[i].properties.deviceName,
-        vk_dev_type(prop[i].properties.deviceType),
-        prop[i].properties.deviceID,
-        drm_prop[i].primaryMajor,
-        drm_prop[i].primaryMinor,
-        drm_prop[i].renderMajor,
-        drm_prop[i].renderMinor);
+        printf("    %d: %s (driverUUID=%s version=%u.%u.%u.%u) (%s) (deviceID=0x%x) (primary major/minor 0x%lx/0x%lx render major/minor 0x%lx/0x%lx\n",
+            i,
+            prop[i].properties.deviceName,
+            idp[i].driverUUID,
+            VK_API_VERSION_MAJOR(prop[i].properties.driverVersion),
+            VK_API_VERSION_MINOR(prop[i].properties.driverVersion),
+            VK_API_VERSION_PATCH(prop[i].properties.driverVersion),
+            VK_API_VERSION_VARIANT(prop[i].properties.driverVersion),
+            vk_dev_type(prop[i].properties.deviceType),
+            prop[i].properties.deviceID,
+            drm_prop[i].primaryMajor,
+            drm_prop[i].primaryMinor,
+            drm_prop[i].renderMajor,
+            drm_prop[i].renderMinor);
     }
 
     i32 choice = -1;
 
     for (u32 i = 0; i < num_devices; i++) {
-        auto& opts = sys_vk._options;
+        auto& opts = sys_vk._options;       
         if (opts.requested_device_major != -1 || opts.requested_device_minor != -1) {
             if (drm_prop[i].primaryMajor == opts.requested_device_major && drm_prop[i].primaryMinor == opts.requested_device_minor) {
                 choice = i;
@@ -888,6 +916,8 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
         const char* this_device_name = prop[i].properties.deviceName;
         if (opts.requested_device_name && util::StrCaseInsensitiveSubstring(this_device_name, opts.requested_device_name)) {
+            if (util::StrEqual(opts.requested_device_name, "amd") && VK_API_VERSION_MAJOR(prop[i].properties.driverVersion) < 23)
+                continue; // HACK to pick up the Mesa Git driver
             choice = i;
             printf("Device %s picked based on device name selection (%s)\n", prop[i].properties.deviceName, opts.requested_device_name);
             break;
@@ -899,7 +929,7 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
     sys_vk._selected_physical_dev_idx = choice;
 
-    printf("Selected device %s\n", prop[choice].properties.deviceName);
+    printf("Selected device %s (driver version: %d)\n", prop[choice].properties.deviceName, VK_API_VERSION_MAJOR(prop[choice].properties.driverVersion));
 
     // Device selected, now query its features for decoding.
     VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features = {};
@@ -926,7 +956,13 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     VkPhysicalDeviceFeatures2 dev_features = {};
     dev_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     dev_features.pNext = &dev_features_1_1;
+
+    util::Timer t;
+    u64 ms;
+    t.GetCurrentTime();
     vk.GetPhysicalDeviceFeatures2(sys_vk.SelectedPhysicalDevice(), &dev_features);
+    ms = t.ElapsedMilliseconds();
+    printf("GetPhysicalDeviceFeatures2 took %" PRIu64 " ms\n", ms);
 
     VkDeviceCreateInfo dev_info = {};
     dev_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -984,39 +1020,67 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
     dev_info.pNext = &priv.features;
 
-    /// Now setup the queue families on the physical device
-    std::vector<VkQueueFamilyProperties> qf;
-    u32 qf_count;
-    vk.GetPhysicalDeviceQueueFamilyProperties(sys_vk.SelectedPhysicalDevice(), &qf_count, nullptr);
-    assert(qf_count);
-    qf.resize(qf_count);
-    vk.GetPhysicalDeviceQueueFamilyProperties(sys_vk.SelectedPhysicalDevice(), &qf_count, qf.data());
+    /// Now setup the queue families on the chosen physical device
+    u32 qf_properties_count;
+    vk.GetPhysicalDeviceQueueFamilyProperties2(sys_vk.SelectedPhysicalDevice(), &qf_properties_count, nullptr);
+    assert(qf_properties_count);
+    sys_vk._qf_properties.resize(qf_properties_count);
+    sys_vk._qf_video_properties.resize(qf_properties_count);
+    for (u32 i = 0; i < qf_properties_count; i++)
+    {
+        sys_vk._qf_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+        sys_vk._qf_video_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+        sys_vk._qf_properties[i].pNext = &sys_vk._qf_video_properties[i];
+    }
+    vk.GetPhysicalDeviceQueueFamilyProperties2(sys_vk.SelectedPhysicalDevice(), &qf_properties_count, sys_vk._qf_properties.data());
+
+    sys_vk._qf_mutexs.resize(qf_properties_count);
+    for (u32 i = 0; i < qf_properties_count; i++) {
+        auto& qf_mutex = sys_vk._qf_mutexs[i];
+        qf_mutex.resize(sys_vk._qf_properties[i].queueFamilyProperties.queueCount);
+        for (auto& mutex : qf_mutex) {
+            pthread_mutex_init(&mutex, nullptr);
+        }
+    }
 
     printf("Queue families:\n");
-    for (u32 i = 0; i < qf.size(); i++) {
-        printf("    %i:%s%s%s%s%s%s%s (queues: %i)\n", i,
-            ((qf[i].queueFlags) & VK_QUEUE_GRAPHICS_BIT) ? " graphics" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_COMPUTE_BIT) ? " compute" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_TRANSFER_BIT) ? " transfer" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) ? " encode" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_VIDEO_DECODE_BIT_KHR) ? " decode" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_SPARSE_BINDING_BIT) ? " sparse" : "",
-            ((qf[i].queueFlags) & VK_QUEUE_PROTECTED_BIT) ? " protected" : "",
-            qf[i].queueCount);
+    for (u32 i = 0; i < sys_vk._qf_properties.size(); i++) {
+        auto flags = sys_vk._qf_properties[i].queueFamilyProperties.queueFlags;
+        printf("    %i:%s%s%s%s%s%s%s (queues: %i)", i,
+            ((flags) & VK_QUEUE_GRAPHICS_BIT) ? " graphics" : "",
+            ((flags) & VK_QUEUE_COMPUTE_BIT) ? " compute" : "",
+            ((flags) & VK_QUEUE_TRANSFER_BIT) ? " transfer" : "",
+            ((flags) & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) ? " encode" : "",
+            ((flags) & VK_QUEUE_VIDEO_DECODE_BIT_KHR) ? " decode" : "",
+            ((flags) & VK_QUEUE_SPARSE_BINDING_BIT) ? " sparse" : "",
+            ((flags) & VK_QUEUE_PROTECTED_BIT) ? " protected" : "",
+            sys_vk._qf_properties[i].queueFamilyProperties.queueCount);
+        
+        if (sys_vk._qf_video_properties[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR)
+            printf(" (decode H264)");
+        if (sys_vk._qf_video_properties[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR)
+            printf(" (decode H265)");
+        if (sys_vk._qf_video_properties[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_MESA)
+            printf(" (decode AV1)");
+        if (sys_vk._qf_video_properties[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_EXT)
+            printf(" (encode H264)");
+        if (sys_vk._qf_video_properties[i].videoCodecOperations & VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_EXT)
+            printf(" (encode H265)");
+        printf("\n");
 
         /* We use this field to keep a score of how many times we've used that
          * queue family in order to make better choices. */
-        qf[i].timestampValidBits = 0;
+        sys_vk._qf_properties[i].queueFamilyProperties.timestampValidBits = 0;
     }
 
-    auto pick_queue_family = [&qf](VkQueueFlagBits flags) {
+    auto pick_queue_family = [&sys_vk](VkQueueFlagBits flags) {
         int index = -1;
         uint32_t min_score = UINT32_MAX;
 
-        for (u32 i = 0; i < qf.size(); i++) {
-            const VkQueueFlags qflags = qf[i].queueFlags;
+        for (u32 i = 0; i < sys_vk._qf_properties.size(); i++) {
+            const VkQueueFlags qflags = sys_vk._qf_properties[i].queueFamilyProperties.queueFlags;
             if (qflags & flags) {
-                uint32_t score = std::__popcount(qflags) + qf[i].timestampValidBits;
+                uint32_t score = std::__popcount(qflags) + sys_vk._qf_properties[i].queueFamilyProperties.timestampValidBits;
                 if (score < min_score) {
                     index = i;
                     min_score = score;
@@ -1025,7 +1089,7 @@ static void choose_and_load_device(SysVulkan& sys_vk)
         }
 
         if (index > -1)
-            qf[index].timestampValidBits++;
+            sys_vk._qf_properties[index].queueFamilyProperties.timestampValidBits++;
 
         return index;
     };
@@ -1056,7 +1120,7 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 #define SETUP_QUEUE(qf_idx)                                                       \
     if (qf_idx > -1) {                                                            \
         int fidx = qf_idx;                                                        \
-        u32 qc = qf[fidx].queueCount;                                             \
+        u32 qc = sys_vk._qf_properties[fidx].queueFamilyProperties.queueCount;    \
         VkDeviceQueueCreateInfo* pc;                                              \
                                                                                   \
         if (fidx == graph_index) {                                                \
@@ -1180,18 +1244,6 @@ static VkBool32 VKAPI_CALL vk_dbg_callback(VkDebugUtilsMessageSeverityFlagBitsEX
     return 0;
 }
 
-void* mallocz(size_t size)
-{
-    void* ptr = nullptr;
-    if (posix_memalign(&ptr, 64, size))
-        ptr = nullptr;
-
-    if (ptr)
-        memset(ptr, 0, size);
-
-    return ptr;
-}
-
 bool init_vulkan(SysVulkan& sys_vk)
 {
     auto& vk = sys_vk._vfn;
@@ -1232,11 +1284,23 @@ bool init_vulkan(SysVulkan& sys_vk)
 #error "Unsupported platform"
 #endif
 
+    util::Timer t;
+    u64 ms;
+
+    t.GetCurrentTime();
     load_vk_functions(sys_vk);
-
+    ms = t.ElapsedMilliseconds();
+    printf("load_vk_functions took %" PRIu64 " ms", ms);
+    
+    t.GetCurrentTime();
     load_instance(sys_vk);
+    ms = t.ElapsedMilliseconds();
+    printf("load_instance took %" PRIu64 " ms", ms);
 
+    t.GetCurrentTime();
     load_vk_functions(sys_vk, FF_VK_EXT_NO_FLAG, true, false);
+    ms = t.ElapsedMilliseconds();
+    printf("load_vk_functions took %" PRIu64 " ms", ms);
 
     if (sys_vk._debug_level > 0) {
         VkDebugUtilsMessengerCreateInfoEXT dbg = {};
@@ -1251,7 +1315,7 @@ bool init_vulkan(SysVulkan& sys_vk)
 
     choose_and_load_device(sys_vk);
 
-    // Fill in everything else needed now that an instance and a device are available.
+    // Fill in everything else needed now that an instance and a physical device are available.
     load_vk_functions(sys_vk, sys_vk.extensions, true, true);
 
     auto& device_priv = sys_vk._selected_physical_device_priv;
@@ -1264,7 +1328,7 @@ bool init_vulkan(SysVulkan& sys_vk)
     vk.GetPhysicalDeviceProperties2(sys_vk.SelectedPhysicalDevice(), &device_priv.props);
     printf("Using device: %s\n",
         device_priv.props.properties.deviceName);
-    printf("Alignments:\n");
+    printf("Physical device alignments:\n");
     printf("    optimalBufferCopyRowPitchAlignment: %" PRIu64 "\n",
         device_priv.props.properties.limits.optimalBufferCopyRowPitchAlignment);
     printf("    minMemoryMapAlignment:              %ld\n",
@@ -1275,25 +1339,19 @@ bool init_vulkan(SysVulkan& sys_vk)
         printf("    minImportedHostPointerAlignment:    %" PRIu64 "\n",
             device_priv.external_memory_host_props.minImportedHostPointerAlignment);
 
-    sys_vk.dev_is_nvidia = (device_priv.props.properties.vendorID == 0x10de);
-
-    std::vector<VkQueueFamilyProperties> qf;
-    u32 qf_count;
-    vk.GetPhysicalDeviceQueueFamilyProperties(sys_vk.SelectedPhysicalDevice(), &qf_count, nullptr);
-    assert(qf_count);
-    qf.resize(qf_count);
-    vk.GetPhysicalDeviceQueueFamilyProperties(sys_vk.SelectedPhysicalDevice(), &qf_count, qf.data());
-
-    sys_vk.qf_mutex.resize(qf_count);
-    sys_vk.num_qfs = qf_count;
-    for (int i = 0; i < sys_vk.num_qfs; i++) {
-        auto& qf_mutex = sys_vk.qf_mutex[i];
-        qf_mutex.resize(qf[i].queueCount);
-        for (auto& mutex : qf_mutex) {
-            pthread_mutex_init(&mutex, nullptr);
-        }
-    }
-
+    // Create the GPU memory allocator
+    VmaVulkanFunctions vulkanFunctions = {};
+    vulkanFunctions.vkGetInstanceProcAddr = sys_vk._get_proc_addr;
+    vulkanFunctions.vkGetDeviceProcAddr = vk.GetDeviceProcAddr;
+ 
+    VmaAllocatorCreateInfo allocatorCreateInfo = {};
+    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorCreateInfo.physicalDevice = sys_vk.SelectedPhysicalDevice();
+    allocatorCreateInfo.device = sys_vk._active_dev;
+    allocatorCreateInfo.instance = sys_vk._instance;
+    allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+ 
+    VK_CHECK(vmaCreateAllocator(&allocatorCreateInfo, &sys_vk._allocator));
     return true;
 }
 
