@@ -10,6 +10,8 @@ set(VVP_SOURCES
 )
 
 set(VVP_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
+list(APPEND VVP_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include)
+list(APPEND VVP_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include/vulkan)
 list(APPEND VVP_INCLUDE_DIRS $ENV{HOME}/cts/root/include)
 list(APPEND VVP_INCLUDE_DIRS third_party/VulkanMemoryAllocator/include)
 
