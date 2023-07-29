@@ -83,7 +83,67 @@ int main(int argc, char** argv)
 	ASSERT(sys_vk);
     vvb::init_vulkan(*sys_vk);
 
+    auto& vk = sys_vk->_vfn;
 
+    // The following profile structs are for reference, they would need to be sniffed from
+    // the input files in reality.
+    VkVideoDecodeAV1ProfileInfoMESA av1_profile_info = {};
+    av1_profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_PROFILE_INFO_MESA;
+    av1_profile_info.pNext = nullptr;
+    av1_profile_info.stdProfileIdc = STD_VIDEO_AV1_MESA_PROFILE_MAIN;
+
+    VkVideoProfileInfoKHR av1_video_profile = {};
+    av1_video_profile.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
+    av1_video_profile.pNext = &av1_profile_info;
+    av1_video_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_MESA;
+    av1_video_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    av1_video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    av1_video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+
+    VkVideoDecodeH264ProfileInfoKHR avc_profile_info = {};
+    avc_profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR;
+    avc_profile_info.pNext = nullptr;
+    avc_profile_info.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_MAIN;
+    avc_profile_info.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
+    
+    VkVideoProfileInfoKHR avc_video_profile = {};
+    avc_video_profile.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
+    avc_video_profile.pNext = &avc_profile_info;
+    avc_video_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    avc_video_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    avc_video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    avc_video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+
+    const VkExtensionProperties avc_ext_version = {
+        VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
+        VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_SPEC_VERSION
+    };
+
+    const VkExtensionProperties av1_ext_version = {
+        VK_STD_VULKAN_VIDEO_CODEC_AV1_DECODE_EXTENSION_NAME,
+        VK_MAKE_VERSION(0, 0, 1),
+    };
+
+    VkVideoSessionCreateInfoKHR session_create_info = {};
+    session_create_info.sType = VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR;
+    session_create_info.pNext = nullptr;
+    session_create_info.queueFamilyIndex = sys_vk->queue_family_decode_index;
+    session_create_info.flags = 0;
+    session_create_info.pVideoProfile = &avc_video_profile;
+    session_create_info.pictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR;
+    session_create_info.maxCodedExtent = VkExtent2D{ 3840, 2160 };
+    session_create_info.referencePictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR;
+    session_create_info.maxDpbSlots = 9;
+    session_create_info.maxActiveReferencePictures = 9;
+    session_create_info.pStdHeaderVersion = &avc_ext_version;
+
+    VkVideoSessionKHR video_session = VK_NULL_HANDLE;
+    VK_CHECK(vk.CreateVideoSessionKHR(sys_vk->_active_dev,
+        &session_create_info,
+        nullptr,
+        &video_session));
+    
+    vk.DestroyVideoSessionKHR(sys_vk->_active_dev, video_session, nullptr);
 	
     // parse bitstream
     // allocate picture buffers

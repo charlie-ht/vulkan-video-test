@@ -98,7 +98,7 @@ static const char* vk_dev_type(enum VkPhysicalDeviceType type)
 }
 
 /* Converts return values to strings */
-static const char* vk_ret2str(VkResult res)
+const char* vk_ret2str(VkResult res)
 {
 #define CASE(VAL) \
     case VAL:     \
@@ -145,7 +145,7 @@ static const char* vk_ret2str(VkResult res)
     do { \
         VkResult err = x; \
         if (err) { \
-            printf("Detected Vulkan error: %s (%d)\n", vk_ret2str(err), err); \
+            printf("Detected Vulkan error: %s (%d)\n", vvb::vk_ret2str(err), err); \
             assert(!err); \
             exit(1); \
         } \
