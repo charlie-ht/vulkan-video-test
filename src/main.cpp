@@ -89,38 +89,14 @@ int main(int argc, char** argv)
 
     // The following profile structs are for reference, they would need to be sniffed from
     // the input files in reality.
-    VkVideoDecodeAV1ProfileInfoMESA av1_profile_info = {};
-    av1_profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_PROFILE_INFO_MESA;
-    av1_profile_info.pNext = nullptr;
-    av1_profile_info.stdProfileIdc = STD_VIDEO_AV1_MESA_PROFILE_MAIN;
-
-    VkVideoProfileInfoKHR av1_video_profile = {};
-    av1_video_profile.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
-    av1_video_profile.pNext = &av1_profile_info;
-    av1_video_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_MESA;
-    av1_video_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-    av1_video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-    av1_video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-
-    VkVideoDecodeH264ProfileInfoKHR avc_profile_info = {};
-    avc_profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR;
-    avc_profile_info.pNext = nullptr;
-    avc_profile_info.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
-    avc_profile_info.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
-    
-    VkVideoProfileInfoKHR avc_video_profile = {};
-    avc_video_profile.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
-    avc_video_profile.pNext = &avc_profile_info;
-    avc_video_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
-    avc_video_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-    avc_video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-    avc_video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    vvb::VideoProfile av1_profile = vvb::Av1Progressive420Profile();
+    vvb::VideoProfile avc_profile = vvb::AvcProgressive420Profile();
 
     VkVideoProfileListInfoKHR avc_session_profile_list = {};
     avc_session_profile_list.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR;
     avc_session_profile_list.pNext = nullptr;
     avc_session_profile_list.profileCount = 1;
-    avc_session_profile_list.pProfiles = &avc_video_profile;
+    avc_session_profile_list.pProfiles = &avc_profile._profile_info;
 
     //;;;;;;;;;; Cap queries
     VkVideoCapabilitiesKHR video_caps = {};
@@ -131,7 +107,8 @@ int main(int argc, char** argv)
     avc_caps.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_CAPABILITIES_KHR;
     decode_caps.pNext = &avc_caps;
     video_caps.pNext = &decode_caps;
-    VK_CHECK(vk.GetPhysicalDeviceVideoCapabilitiesKHR(sys_vk->SelectedPhysicalDevice(), &avc_video_profile, &video_caps));
+    VK_CHECK(vk.GetPhysicalDeviceVideoCapabilitiesKHR(sys_vk->SelectedPhysicalDevice(),
+        &avc_profile._profile_info, &video_caps));
 
     bool dpb_and_dst_coincide = video_caps.flags & VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_COINCIDE_BIT_KHR;
     VkFormat dpb_image_format = VK_FORMAT_UNDEFINED;
@@ -168,8 +145,8 @@ int main(int argc, char** argv)
     auto supported_output_formats = get_supported_formats(out_usage);
     // Think of what to do for > 1 supported formats
     ASSERT(supported_output_formats.size() == 1 && supported_dpb_formats.size() == 1);
-    VkFormat selected_dpb_format = supported_dpb_formats[0].format;
-    VkFormat selected_out_format = supported_output_formats[0].format;
+    auto selected_dpb_format = supported_dpb_formats[0];
+    auto selected_out_format = supported_output_formats[0];
     
     //;;;;;;;;;; End of cap queries
 
@@ -189,10 +166,10 @@ int main(int argc, char** argv)
     session_create_info.pNext = nullptr;
     session_create_info.queueFamilyIndex = sys_vk->queue_family_decode_index;
     session_create_info.flags = 0;
-    session_create_info.pVideoProfile = &avc_video_profile;
-    session_create_info.pictureFormat = selected_out_format;
+    session_create_info.pVideoProfile = &avc_profile._profile_info;
+    session_create_info.pictureFormat = selected_out_format.format;
     session_create_info.maxCodedExtent = video_caps.maxCodedExtent;
-    session_create_info.referencePictureFormat = selected_dpb_format;
+    session_create_info.referencePictureFormat = selected_dpb_format.format;
     session_create_info.maxDpbSlots = std::min(video_caps.maxDpbSlots, AVC_MAX_DPB_REF_SLOTS + 1u); // From the H.264 spec, + 1 for the setup slot.
     session_create_info.maxActiveReferencePictures = std::min(video_caps.maxActiveReferencePictures, (u32)AVC_MAX_DPB_REF_SLOTS);
     session_create_info.pStdHeaderVersion = &avc_ext_version;
@@ -354,7 +331,7 @@ int main(int argc, char** argv)
         nullptr, &video_session_params));
 	
     // parse bitstream
-    u64 bitstream_size = 55;
+    u64 bitstream_size = 58;
     VkBufferCreateInfo bitstream_buffer_info = {};
     bitstream_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bitstream_buffer_info.pNext = &avc_session_profile_list;
@@ -373,9 +350,69 @@ int main(int argc, char** argv)
         &bitstream_buffer,
         &bitstream_alloc,
         nullptr);
+    u8 slice_bytes[] = {0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x3a, 0xfe, 0xe6, 0xc0, 0xf9, 0x96, 0x55, 0x0d, 0x57, 0x7f, 0xfd, 0x69, 0x3d, 0x2b, 0xf8, 0xcd, 0x22, 0xe5, 0x25, 0xe2, 0x93, 0x0c, 0xad, 0xe0, 0xfa, 0x71, 0x00, 0xcb, 0x99, 0xd1, 0xd6, 0xb5, 0x9b, 0xed, 0x6f, 0x8b, 0x38, 0xa7, 0xdc, 0xe1, 0x90, 0x01, 0x6e, 0x00, 0x10, 0xd0, 0x9a, 0xf3, 0x63, 0x3f, 0x81, 0x00};
+    void* bitstream_mapped = nullptr;
+    VK_CHECK(vmaMapMemory(sys_vk->_allocator, bitstream_alloc, &bitstream_mapped));
+    memcpy(bitstream_mapped, slice_bytes, sizeof(slice_bytes));
+    vmaUnmapMemory(sys_vk->_allocator, bitstream_alloc);
+
+
 
     // allocate picture buffers
-    // perform decode algorithm for each AU (**)
+    VkImageCreateInfo dpb_image_info = {};
+    dpb_image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    dpb_image_info.pNext = &avc_session_profile_list;
+    dpb_image_info.flags = 0;
+    dpb_image_info.imageType = VK_IMAGE_TYPE_2D;
+    dpb_image_info.format = selected_dpb_format.format;
+    dpb_image_info.extent = VkExtent3D{176, 144, 1};
+    dpb_image_info.mipLevels = 1;
+    dpb_image_info.arrayLayers = 1;
+    dpb_image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    dpb_image_info.tiling = VK_IMAGE_TILING_OPTIMAL; // todo: consult the caps
+    dpb_image_info.usage = dpb_usage;
+    dpb_image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    // todo: There are different strategies for fetching the image. Sometimes the video
+    // queues support transfer ops, and using them directly is better. Othertimes the video
+    // queue cannot be used for transfers (downloads), and a dedicated transfer queue is required.
+    // For now assume we always use a separate transfer queue.
+    ASSERT(sys_vk->queue_family_decode_index != sys_vk->queue_family_tx_index);
+    dpb_image_info.queueFamilyIndexCount = 2;
+    u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
+    dpb_image_info.pQueueFamilyIndices = queue_family_indices;
+    VmaAllocationCreateInfo dpb_image_alloc_info = {};
+    dpb_image_alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    dpb_image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VkImage dpb_image = VK_NULL_HANDLE;
+    VmaAllocation dpb_image_alloc = VK_NULL_HANDLE;
+    vmaCreateImage(sys_vk->_allocator,
+        &dpb_image_info,
+        &dpb_image_alloc_info,
+        &dpb_image,
+        &dpb_image_alloc,
+        nullptr);
+    VkImageViewUsageCreateInfo dpb_image_view_usage_info = {};
+    dpb_image_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+    dpb_image_view_usage_info.usage = dpb_usage;
+    VkImageViewCreateInfo dpb_image_view_info = {};
+    dpb_image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    dpb_image_view_info.pNext = &dpb_image_view_usage_info;
+    dpb_image_view_info.flags = 0;
+    dpb_image_view_info.image = dpb_image;
+    dpb_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
+    dpb_image_view_info.format = selected_dpb_format.format;
+    dpb_image_view_info.components = selected_dpb_format.componentMapping;
+    dpb_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    dpb_image_view_info.subresourceRange.baseMipLevel = 0;
+    dpb_image_view_info.subresourceRange.levelCount = 1;
+    dpb_image_view_info.subresourceRange.baseArrayLayer = 0;
+    dpb_image_view_info.subresourceRange.layerCount = 1;
+    VkImageView dpb_image_view = VK_NULL_HANDLE;
+    VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &dpb_image_view_info, nullptr, &dpb_image_view));
+    
+
+
+    // perform decode algorithm for each AU (**)iop
     // for each frame, submit decode command
     // wait for frames to decode and present to the screen
 
@@ -408,7 +445,7 @@ int main(int argc, char** argv)
     {
         VkQueryPoolCreateInfo query_pool_info = {};
         query_pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        query_pool_info.pNext = &avc_video_profile;
+        query_pool_info.pNext = &avc_profile._profile_info;
         query_pool_info.flags = 0;
         query_pool_info.queryType = VK_QUERY_TYPE_RESULT_STATUS_ONLY_KHR;
         query_pool_info.queryCount = 16; // numSlots
@@ -468,6 +505,8 @@ int main(int argc, char** argv)
         ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
     }
 
+    vk.DestroyImageView(sys_vk->_active_dev, dpb_image_view, nullptr);
+    vmaDestroyImage(sys_vk->_allocator, dpb_image, dpb_image_alloc);
     vmaDestroyBuffer(sys_vk->_allocator, bitstream_buffer, bitstream_alloc);
     if (sys_vk->_query_pool != VK_NULL_HANDLE)
     {
@@ -477,9 +516,7 @@ int main(int argc, char** argv)
     vk.DestroyVideoSessionParametersKHR(sys_vk->_active_dev, video_session_params, nullptr);
     for (auto& alloc : session_memory_allocations)
         vmaFreeMemory(sys_vk->_allocator, alloc);
-
     vk.DestroyVideoSessionKHR(sys_vk->_active_dev, video_session, nullptr);
-
 
 	delete sys_vk;
 	return 0;

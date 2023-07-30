@@ -1343,4 +1343,72 @@ bool init_vulkan(SysVulkan& sys_vk)
     return true;
 }
 
+struct VideoProfile
+{
+    VkVideoDecodeUsageInfoKHR _decode_usage_info;
+    VkVideoProfileInfoKHR _profile_info;
+    union {
+        VkVideoDecodeAV1ProfileInfoMESA av1;
+        VkVideoDecodeH264ProfileInfoKHR avc;
+    } _decode_codec_profile;
+};
+bool VideoProfilesDiffer(const VideoProfile& a, const VideoProfile& b)
+{
+    if (a._profile_info.videoCodecOperation != b._profile_info.videoCodecOperation)
+        return true;
+
+    if (!(a._decode_usage_info.videoUsageHints == b._decode_usage_info.videoUsageHints &&
+            a._profile_info.chromaBitDepth == b._profile_info.chromaBitDepth &&
+            a._profile_info.lumaBitDepth == b._profile_info.lumaBitDepth &&
+            a._profile_info.chromaSubsampling == b._profile_info.chromaSubsampling))
+        return true;
+       
+
+    switch(a._profile_info.videoCodecOperation)
+    {
+        case VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_MESA:
+            return a._decode_codec_profile.av1.stdProfileIdc == b._decode_codec_profile.av1.stdProfileIdc;
+        case VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR:
+            return a._decode_codec_profile.avc.stdProfileIdc == b._decode_codec_profile.avc.stdProfileIdc && \
+                a._decode_codec_profile.avc.pictureLayout == b._decode_codec_profile.avc.pictureLayout;
+        default: ASSERT(false);
+    }
+    return false;
+}
+VideoProfile AvcProgressive420Profile()
+{
+    VideoProfile avc_profile = {};
+    avc_profile._decode_usage_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_USAGE_INFO_KHR;
+    avc_profile._decode_usage_info.pNext = nullptr;
+    avc_profile._decode_usage_info.videoUsageHints = VK_VIDEO_DECODE_USAGE_DEFAULT_KHR;
+    avc_profile._decode_codec_profile.avc.sType =  VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR;
+    avc_profile._decode_codec_profile.avc.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
+    avc_profile._decode_codec_profile.avc.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
+    avc_profile._decode_codec_profile.avc.pNext = nullptr;
+    avc_profile._profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
+    avc_profile._profile_info.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    avc_profile._profile_info.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    avc_profile._profile_info.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    avc_profile._profile_info.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    avc_profile._profile_info.pNext = &avc_profile._decode_codec_profile.avc;
+    return avc_profile;
+}
+VideoProfile Av1Progressive420Profile()
+{
+    VideoProfile av1_profile = {};
+    av1_profile._decode_usage_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_USAGE_INFO_KHR;
+    av1_profile._decode_usage_info.pNext = nullptr;
+    av1_profile._decode_usage_info.videoUsageHints = VK_VIDEO_DECODE_USAGE_DEFAULT_KHR;
+    av1_profile._decode_codec_profile.av1.sType =  VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_PROFILE_INFO_MESA;
+    av1_profile._decode_codec_profile.av1.stdProfileIdc = STD_VIDEO_AV1_MESA_PROFILE_MAIN;
+    av1_profile._decode_codec_profile.av1.pNext = nullptr;
+    av1_profile._profile_info.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
+    av1_profile._profile_info.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    av1_profile._profile_info.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    av1_profile._profile_info.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    av1_profile._profile_info.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_MESA;
+    av1_profile._profile_info.pNext = &av1_profile._decode_codec_profile.av1;
+    return av1_profile;
+}
+
 } // namespace vvb
