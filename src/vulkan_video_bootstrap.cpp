@@ -472,6 +472,9 @@ public:
     int queue_family_decode_index;
     int nb_decode_queues;
 
+    VkQueue _decode_queue0{VK_NULL_HANDLE};
+    VkQueue _tx_queue0{VK_NULL_HANDLE};
+
     bool EncodeQueriesAreSupported() const
     {
         return _qf_query_support[queue_family_encode_index].queryResultStatusSupport;
@@ -916,6 +919,8 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
     printf("Selected device %s (driver version: %d)\n", prop[choice].properties.deviceName, VK_API_VERSION_MAJOR(prop[choice].properties.driverVersion));
 
+    sys_vk.dev_is_nvidia = drm_prop[choice].primaryMajor == 0xe2;
+
     // Device selected, now query its features for decoding.
     VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features = {};
     timeline_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
@@ -1168,6 +1173,8 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     SETUP_QUEUE(enc_index)
     SETUP_QUEUE(dec_index)
 
+    ASSERT(sys_vk.queue_family_decode_index > -1);
+
 #undef SETUP_QUEUE
 
     {
@@ -1305,6 +1312,10 @@ bool init_vulkan(SysVulkan& sys_vk)
 
     // Fill in everything else needed now that an instance and a physical device are available.
     load_vk_functions(sys_vk, sys_vk.extensions, true, true);
+
+    vk.GetDeviceQueue(sys_vk._active_dev, sys_vk.queue_family_decode_index, 0, &sys_vk._decode_queue0);
+    vk.GetDeviceQueue(sys_vk._active_dev, sys_vk.queue_family_decode_index, 0, &sys_vk._tx_queue0);
+    ASSERT(sys_vk._decode_queue0 != VK_NULL_HANDLE && sys_vk._tx_queue0 != VK_NULL_HANDLE);
 
     auto& device_priv = sys_vk._selected_physical_device_priv;
 

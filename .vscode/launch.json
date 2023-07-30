@@ -20,10 +20,10 @@
                 //     "name": "VK_ICD_FILENAMES",
                 //     "value": "${env:HOME}/cts/root/share/vulkan/icd.d/radeon_icd.x86_64.json"
                 // },
-                // {
-                //     "name": "RADV_PERFTEST",
-                //     "value": "video_decode"
-                // },
+                {
+                    "name": "RADV_PERFTEST",
+                    "value": "video_decode"
+                },
                 // {
                 //     "name": "VK_INSTANCE_LAYERS",
                 //     "value": ":VK_LAYER_LUNARG_gfxreconstruct",

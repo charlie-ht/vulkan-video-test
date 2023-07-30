@@ -135,7 +135,7 @@ int main(int argc, char** argv)
         return supported_formats;
     };
     VkImageUsageFlags dpb_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
-    VkImageUsageFlags out_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkImageUsageFlags out_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (dpb_and_dst_coincide)
     {
         dpb_usage = out_usage | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
@@ -359,63 +359,73 @@ int main(int argc, char** argv)
 
 
     // allocate picture buffers
-    VkImageCreateInfo dpb_image_info = {};
-    dpb_image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    dpb_image_info.pNext = &avc_session_profile_list;
-    dpb_image_info.flags = 0;
-    dpb_image_info.imageType = VK_IMAGE_TYPE_2D;
-    dpb_image_info.format = selected_dpb_format.format;
-    dpb_image_info.extent = VkExtent3D{176, 144, 1};
-    dpb_image_info.mipLevels = 1;
-    dpb_image_info.arrayLayers = 1;
-    dpb_image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    dpb_image_info.tiling = VK_IMAGE_TILING_OPTIMAL; // todo: consult the caps
-    dpb_image_info.usage = dpb_usage;
-    dpb_image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    VkImageCreateInfo out_image_info = {};
+    out_image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    out_image_info.pNext = &avc_session_profile_list;
+    out_image_info.flags = 0;
+    out_image_info.imageType = VK_IMAGE_TYPE_2D;
+    out_image_info.format = selected_out_format.format;
+    out_image_info.extent = VkExtent3D{176, 144, 1};
+    out_image_info.mipLevels = 1;
+    out_image_info.arrayLayers = 1;
+    out_image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    out_image_info.tiling = VK_IMAGE_TILING_OPTIMAL; // todo: consult the caps
+    out_image_info.usage = out_usage;
+    out_image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
     // todo: There are different strategies for fetching the image. Sometimes the video
     // queues support transfer ops, and using them directly is better. Othertimes the video
     // queue cannot be used for transfers (downloads), and a dedicated transfer queue is required.
     // For now assume we always use a separate transfer queue.
     ASSERT(sys_vk->queue_family_decode_index != sys_vk->queue_family_tx_index);
-    dpb_image_info.queueFamilyIndexCount = 2;
+    out_image_info.queueFamilyIndexCount = 2;
     u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
-    dpb_image_info.pQueueFamilyIndices = queue_family_indices;
-    VmaAllocationCreateInfo dpb_image_alloc_info = {};
-    dpb_image_alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    dpb_image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    VkImage dpb_image = VK_NULL_HANDLE;
-    VmaAllocation dpb_image_alloc = VK_NULL_HANDLE;
+    out_image_info.pQueueFamilyIndices = queue_family_indices;
+    VmaAllocationCreateInfo out_image_alloc_info = {};
+    out_image_alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    out_image_alloc_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VkImage out_image = VK_NULL_HANDLE;
+    VmaAllocation out_image_alloc = VK_NULL_HANDLE;
     vmaCreateImage(sys_vk->_allocator,
-        &dpb_image_info,
-        &dpb_image_alloc_info,
-        &dpb_image,
-        &dpb_image_alloc,
+        &out_image_info,
+        &out_image_alloc_info,
+        &out_image,
+        &out_image_alloc,
         nullptr);
-    VkImageViewUsageCreateInfo dpb_image_view_usage_info = {};
-    dpb_image_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-    dpb_image_view_usage_info.usage = dpb_usage;
-    VkImageViewCreateInfo dpb_image_view_info = {};
-    dpb_image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    dpb_image_view_info.pNext = &dpb_image_view_usage_info;
-    dpb_image_view_info.flags = 0;
-    dpb_image_view_info.image = dpb_image;
-    dpb_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
-    dpb_image_view_info.format = selected_dpb_format.format;
-    dpb_image_view_info.components = selected_dpb_format.componentMapping;
-    dpb_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
-    dpb_image_view_info.subresourceRange.baseMipLevel = 0;
-    dpb_image_view_info.subresourceRange.levelCount = 1;
-    dpb_image_view_info.subresourceRange.baseArrayLayer = 0;
-    dpb_image_view_info.subresourceRange.layerCount = 1;
-    VkImageView dpb_image_view = VK_NULL_HANDLE;
-    VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &dpb_image_view_info, nullptr, &dpb_image_view));
-    
-
+    VkImageViewUsageCreateInfo out_image_view_usage_info = {};
+    out_image_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+    out_image_view_usage_info.usage = out_usage;
+    VkImageViewCreateInfo out_image_view_info = {};
+    out_image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    out_image_view_info.pNext = &out_image_view_usage_info;
+    out_image_view_info.flags = 0;
+    out_image_view_info.image = out_image;
+    out_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
+    out_image_view_info.format = selected_out_format.format;
+    out_image_view_info.components = selected_out_format.componentMapping;
+    out_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    out_image_view_info.subresourceRange.baseMipLevel = 0;
+    out_image_view_info.subresourceRange.levelCount = 1;
+    out_image_view_info.subresourceRange.baseArrayLayer = 0;
+    out_image_view_info.subresourceRange.layerCount = 1;
+    VkImageView out_image_view = VK_NULL_HANDLE;
+    VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &out_image_view_info, nullptr, &out_image_view));
 
     // perform decode algorithm for each AU (**)iop
     // for each frame, submit decode command
     // wait for frames to decode and present to the screen
 
+    // Queries
+    if (sys_vk->DecodeQueriesAreSupported())
+    {
+        VkQueryPoolCreateInfo query_pool_info = {};
+        query_pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        query_pool_info.pNext = &avc_profile._profile_info;
+        query_pool_info.flags = 0;
+        query_pool_info.queryType = VK_QUERY_TYPE_RESULT_STATUS_ONLY_KHR;
+        query_pool_info.queryCount = 32; // numSlots
+        query_pool_info.pipelineStatistics = 0;
+        VK_CHECK(vk.CreateQueryPool(sys_vk->_active_dev, &query_pool_info, nullptr, &sys_vk->_query_pool));
+    }
     VkCommandPool cmd_pool = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo cmd_pool_info = {};
     cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -440,20 +450,13 @@ int main(int argc, char** argv)
     cmd_buf_begin_info.pInheritanceInfo = nullptr;
     vk.BeginCommandBuffer(cmd_buf, &cmd_buf_begin_info);
 
+
     // Queries
     if (sys_vk->DecodeQueriesAreSupported())
     {
-        VkQueryPoolCreateInfo query_pool_info = {};
-        query_pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        query_pool_info.pNext = &avc_profile._profile_info;
-        query_pool_info.flags = 0;
-        query_pool_info.queryType = VK_QUERY_TYPE_RESULT_STATUS_ONLY_KHR;
-        query_pool_info.queryCount = 16; // numSlots
-        query_pool_info.pipelineStatistics = 0;
-        VK_CHECK(vk.CreateQueryPool(sys_vk->_active_dev, &query_pool_info, nullptr, &sys_vk->_query_pool));
-
-        vk.CmdResetQueryPool(cmd_buf, sys_vk->_query_pool, 0, 16);
+        vk.CmdResetQueryPool(cmd_buf, sys_vk->_query_pool, 0, 1);
     }
+
 
     //;;;;;;;;;;; Video coding scope begin
     VkVideoBeginCodingInfoKHR begin_coding_info = {};
@@ -474,8 +477,47 @@ int main(int argc, char** argv)
 
     if (sys_vk->DecodeQueriesAreSupported())
     {
-        vk.CmdBeginQuery(cmd_buf, sys_vk->_query_pool, 0, 0);
+        vk.CmdBeginQuery(cmd_buf, sys_vk->_query_pool, 0, VkQueryControlFlags());
     }
+
+    StdVideoDecodeH264PictureInfo avc_picture_info = {};
+    avc_picture_info.flags.field_pic_flag = 0;
+    avc_picture_info.flags.is_intra = 1;
+    avc_picture_info.flags.IdrPicFlag = 0;
+    avc_picture_info.flags.bottom_field_flag = 0;
+    avc_picture_info.flags.is_reference = 0;
+    avc_picture_info.flags.complementary_field_pair = 0;
+    avc_picture_info.seq_parameter_set_id = 0;
+    avc_picture_info.pic_parameter_set_id = 0;
+    avc_picture_info.frame_num = 0;
+    avc_picture_info.idr_pic_id = 0;
+    avc_picture_info.PicOrderCnt[0] = 0;
+    avc_picture_info.PicOrderCnt[1] = 0;
+    VkVideoDecodeH264PictureInfoKHR avc_decode_info = {};
+    avc_decode_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PICTURE_INFO_KHR;
+    avc_decode_info.pNext = nullptr;
+    avc_decode_info.pStdPictureInfo = &avc_picture_info;
+    avc_decode_info.sliceCount = 1;
+    u32 slice_offsets[] = {0};
+    avc_decode_info.pSliceOffsets = slice_offsets;
+
+    VkVideoDecodeInfoKHR decode_info = {};
+    decode_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_INFO_KHR;
+    decode_info.pNext = &avc_decode_info;
+    decode_info.flags = 0;
+    decode_info.srcBuffer = bitstream_buffer;
+    decode_info.srcBufferOffset = 0;
+    decode_info.srcBufferRange = bitstream_buffer_info.size;
+    decode_info.dstPictureResource.sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+    decode_info.dstPictureResource.pNext = nullptr;
+    decode_info.dstPictureResource.codedExtent = VkExtent2D{ 176, 144 };
+    decode_info.dstPictureResource.codedOffset = VkOffset2D{ 0, 0 };
+    decode_info.dstPictureResource.baseArrayLayer = 0;
+    decode_info.dstPictureResource.imageViewBinding = out_image_view;
+    decode_info.pSetupReferenceSlot = nullptr;
+    decode_info.referenceSlotCount = 0;
+    decode_info.pReferenceSlots = nullptr;
+    vk.CmdDecodeVideoKHR(cmd_buf, &decode_info);
 
     if (sys_vk->DecodeQueriesAreSupported())
     {
@@ -491,6 +533,26 @@ int main(int argc, char** argv)
 
     vk.EndCommandBuffer(cmd_buf);
 
+    VkFenceCreateInfo fence_info = {};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_info.pNext = nullptr;
+    fence_info.flags = 0;
+    VkFence fence;
+    vk.CreateFence(sys_vk->_active_dev, &fence_info, nullptr, &fence);
+    VkSubmitInfo submit_info = {};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = nullptr;
+    submit_info.pWaitDstStageMask = 0;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd_buf;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = nullptr;
+    VK_CHECK(vk.QueueSubmit(sys_vk->_decode_queue0, 1, &submit_info, fence));
+    VK_CHECK(vk.WaitForFences(sys_vk->_active_dev, 1, &fence, VK_TRUE, UINT64_MAX));
+
+    // todo: this just hangs...
     if (sys_vk->DecodeQueriesAreSupported())
     {
         VkQueryResultStatusKHR decode_status;
@@ -505,8 +567,8 @@ int main(int argc, char** argv)
         ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
     }
 
-    vk.DestroyImageView(sys_vk->_active_dev, dpb_image_view, nullptr);
-    vmaDestroyImage(sys_vk->_allocator, dpb_image, dpb_image_alloc);
+    vk.DestroyImageView(sys_vk->_active_dev, out_image_view, nullptr);
+    vmaDestroyImage(sys_vk->_allocator, out_image, out_image_alloc);
     vmaDestroyBuffer(sys_vk->_allocator, bitstream_buffer, bitstream_alloc);
     if (sys_vk->_query_pool != VK_NULL_HANDLE)
     {
