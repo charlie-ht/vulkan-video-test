@@ -270,5 +270,11 @@ private:
     timespec start;
 };
 
+template<typename T>
+constexpr T AlignUp(T x, T align)
+{
+    return ((x) + ((align) - 1)) & ~((align) - 1);
+}
+
 } // namespace util
 

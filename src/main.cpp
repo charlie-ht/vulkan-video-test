@@ -354,6 +354,26 @@ int main(int argc, char** argv)
         nullptr, &video_session_params));
 	
     // parse bitstream
+    u64 bitstream_size = 55;
+    VkBufferCreateInfo bitstream_buffer_info = {};
+    bitstream_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bitstream_buffer_info.pNext = &avc_session_profile_list;
+    bitstream_buffer_info.size = util::AlignUp(bitstream_size, video_caps.minBitstreamBufferSizeAlignment);
+    bitstream_buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR;
+    VmaAllocationCreateInfo bitstream_alloc_info = {};
+    bitstream_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
+    // I can use uncached combined memory for extra performance.
+    bitstream_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    VkBuffer bitstream_buffer = VK_NULL_HANDLE;
+    VmaAllocation bitstream_alloc = VK_NULL_HANDLE;
+    vmaCreateBuffer(sys_vk->_allocator,
+        &bitstream_buffer_info,
+        &bitstream_alloc_info,
+        &bitstream_buffer,
+        &bitstream_alloc,
+        nullptr);
+
     // allocate picture buffers
     // perform decode algorithm for each AU (**)
     // for each frame, submit decode command
@@ -448,6 +468,7 @@ int main(int argc, char** argv)
         ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
     }
 
+    vmaDestroyBuffer(sys_vk->_allocator, bitstream_buffer, bitstream_alloc);
     if (sys_vk->_query_pool != VK_NULL_HANDLE)
     {
         vk.DestroyQueryPool(sys_vk->_active_dev, sys_vk->_query_pool, nullptr);
