@@ -3,6 +3,7 @@
 #include "vk.hpp"
 
 #include <string>
+#include <numeric>
 
 #include "vulkan_video_bootstrap.cpp"
 
@@ -115,6 +116,63 @@ int main(int argc, char** argv)
     avc_video_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
     avc_video_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
 
+    VkVideoProfileListInfoKHR avc_session_profile_list = {};
+    avc_session_profile_list.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR;
+    avc_session_profile_list.pNext = nullptr;
+    avc_session_profile_list.profileCount = 1;
+    avc_session_profile_list.pProfiles = &avc_video_profile;
+
+    //;;;;;;;;;; Cap queries
+    VkVideoCapabilitiesKHR video_caps = {};
+    video_caps.sType = VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR;
+    VkVideoDecodeCapabilitiesKHR decode_caps = {};
+    decode_caps.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_CAPABILITIES_KHR;
+    VkVideoDecodeH264CapabilitiesKHR avc_caps = {};
+    avc_caps.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_CAPABILITIES_KHR;
+    decode_caps.pNext = &avc_caps;
+    video_caps.pNext = &decode_caps;
+    VK_CHECK(vk.GetPhysicalDeviceVideoCapabilitiesKHR(sys_vk->SelectedPhysicalDevice(), &avc_video_profile, &video_caps));
+
+    bool dpb_and_dst_coincide = video_caps.flags & VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_COINCIDE_BIT_KHR;
+    VkFormat dpb_image_format = VK_FORMAT_UNDEFINED;
+    VkFormat out_image_format = VK_FORMAT_UNDEFINED;
+    
+    auto get_supported_formats = [=](VkImageUsageFlags usage_flags){
+        u32 num_supported_formats = 0;
+        VkPhysicalDeviceVideoFormatInfoKHR video_format_info = {};
+        video_format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR;
+        video_format_info.pNext = &avc_session_profile_list;
+        video_format_info.imageUsage = usage_flags;
+        vk.GetPhysicalDeviceVideoFormatPropertiesKHR(sys_vk->SelectedPhysicalDevice(),
+            &video_format_info,
+            &num_supported_formats,
+            nullptr);
+        
+        std::vector<VkVideoFormatPropertiesKHR> supported_formats(num_supported_formats);
+        for (auto& sf : supported_formats)
+            sf.sType = VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR;
+        vk.GetPhysicalDeviceVideoFormatPropertiesKHR(sys_vk->SelectedPhysicalDevice(),
+            &video_format_info,
+            &num_supported_formats,
+            supported_formats.data());
+        return supported_formats;
+    };
+    VkImageUsageFlags dpb_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
+    VkImageUsageFlags out_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (dpb_and_dst_coincide)
+    {
+        dpb_usage = out_usage | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
+        out_usage &= ~VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR;
+    }
+    auto supported_dpb_formats = get_supported_formats(dpb_usage);
+    auto supported_output_formats = get_supported_formats(out_usage);
+    // Think of what to do for > 1 supported formats
+    ASSERT(supported_output_formats.size() == 1 && supported_dpb_formats.size() == 1);
+    VkFormat selected_dpb_format = supported_dpb_formats[0].format;
+    VkFormat selected_out_format = supported_output_formats[0].format;
+    
+    //;;;;;;;;;; End of cap queries
+
     const VkExtensionProperties avc_ext_version = {
         VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
         VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_SPEC_VERSION
@@ -125,18 +183,18 @@ int main(int argc, char** argv)
         VK_MAKE_VERSION(0, 0, 1),
     };
 
-    const int AVC_MAX_DPB_REF_SLOTS = 16;
+    const int AVC_MAX_DPB_REF_SLOTS = 16u;
     VkVideoSessionCreateInfoKHR session_create_info = {};
     session_create_info.sType = VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR;
     session_create_info.pNext = nullptr;
     session_create_info.queueFamilyIndex = sys_vk->queue_family_decode_index;
     session_create_info.flags = 0;
     session_create_info.pVideoProfile = &avc_video_profile;
-    session_create_info.pictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR;
-    session_create_info.maxCodedExtent = VkExtent2D{ 3840, 2160 };
-    session_create_info.referencePictureFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM_KHR;
-    session_create_info.maxDpbSlots = AVC_MAX_DPB_REF_SLOTS + 1; // From the H.264 spec, + 1 for the setup slot.
-    session_create_info.maxActiveReferencePictures = AVC_MAX_DPB_REF_SLOTS;
+    session_create_info.pictureFormat = selected_out_format;
+    session_create_info.maxCodedExtent = video_caps.maxCodedExtent;
+    session_create_info.referencePictureFormat = selected_dpb_format;
+    session_create_info.maxDpbSlots = std::min(video_caps.maxDpbSlots, AVC_MAX_DPB_REF_SLOTS + 1u); // From the H.264 spec, + 1 for the setup slot.
+    session_create_info.maxActiveReferencePictures = std::min(video_caps.maxActiveReferencePictures, (u32)AVC_MAX_DPB_REF_SLOTS);
     session_create_info.pStdHeaderVersion = &avc_ext_version;
 
     VkVideoSessionKHR video_session = VK_NULL_HANDLE;
@@ -301,9 +359,101 @@ int main(int argc, char** argv)
     // for each frame, submit decode command
     // wait for frames to decode and present to the screen
 
+    VkCommandPool cmd_pool = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo cmd_pool_info = {};
+    cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cmd_pool_info.pNext = nullptr;
+    cmd_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    cmd_pool_info.queueFamilyIndex = sys_vk->queue_family_decode_index;
+    VK_CHECK(vk.CreateCommandPool(sys_vk->_active_dev, &cmd_pool_info, nullptr, &cmd_pool));
 
+    VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cmd_buf_alloc_info = {};
+    cmd_buf_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmd_buf_alloc_info.pNext = nullptr;
+    cmd_buf_alloc_info.commandPool = cmd_pool;
+    cmd_buf_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmd_buf_alloc_info.commandBufferCount = 1;
+    VK_CHECK(vk.AllocateCommandBuffers(sys_vk->_active_dev, &cmd_buf_alloc_info, &cmd_buf));
+
+    VkCommandBufferBeginInfo cmd_buf_begin_info = {};
+    cmd_buf_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cmd_buf_begin_info.pNext = nullptr;
+    cmd_buf_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    cmd_buf_begin_info.pInheritanceInfo = nullptr;
+    vk.BeginCommandBuffer(cmd_buf, &cmd_buf_begin_info);
+
+    // Queries
+    if (sys_vk->DecodeQueriesAreSupported())
+    {
+        VkQueryPoolCreateInfo query_pool_info = {};
+        query_pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        query_pool_info.pNext = &avc_video_profile;
+        query_pool_info.flags = 0;
+        query_pool_info.queryType = VK_QUERY_TYPE_RESULT_STATUS_ONLY_KHR;
+        query_pool_info.queryCount = 16; // numSlots
+        query_pool_info.pipelineStatistics = 0;
+        VK_CHECK(vk.CreateQueryPool(sys_vk->_active_dev, &query_pool_info, nullptr, &sys_vk->_query_pool));
+
+        vk.CmdResetQueryPool(cmd_buf, sys_vk->_query_pool, 0, 16);
+    }
+
+    //;;;;;;;;;;; Video coding scope begin
+    VkVideoBeginCodingInfoKHR begin_coding_info = {};
+    begin_coding_info.sType = VK_STRUCTURE_TYPE_VIDEO_BEGIN_CODING_INFO_KHR;
+    begin_coding_info.pNext = nullptr;
+    begin_coding_info.flags = 0;
+    begin_coding_info.videoSession = video_session;
+    begin_coding_info.videoSessionParameters = video_session_params;
+    begin_coding_info.referenceSlotCount = 0;
+    begin_coding_info.pReferenceSlots = nullptr;
+    vk.CmdBeginVideoCodingKHR(cmd_buf, &begin_coding_info);
+
+    VkVideoCodingControlInfoKHR coding_ctrl_info = {};
+    coding_ctrl_info.sType = VK_STRUCTURE_TYPE_VIDEO_CODING_CONTROL_INFO_KHR;
+    coding_ctrl_info.pNext = nullptr;
+    coding_ctrl_info.flags = VK_VIDEO_CODING_CONTROL_RESET_BIT_KHR;
+    vk.CmdControlVideoCodingKHR(cmd_buf, &coding_ctrl_info);
+
+    if (sys_vk->DecodeQueriesAreSupported())
+    {
+        vk.CmdBeginQuery(cmd_buf, sys_vk->_query_pool, 0, 0);
+    }
+
+    if (sys_vk->DecodeQueriesAreSupported())
+    {
+        vk.CmdEndQuery(cmd_buf, sys_vk->_query_pool, 0);
+    }
+
+    VkVideoEndCodingInfoKHR end_coding_info = {};
+    end_coding_info.sType = VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR;
+    end_coding_info.pNext = nullptr;
+    end_coding_info.flags = 0;    
+    vk.CmdEndVideoCodingKHR(cmd_buf, &end_coding_info);
+    //;;;;;;;;;;; Video coding scope end
+
+    vk.EndCommandBuffer(cmd_buf);
+
+    if (sys_vk->DecodeQueriesAreSupported())
+    {
+        VkQueryResultStatusKHR decode_status;
+        VK_CHECK(vk.GetQueryPoolResults(sys_vk->_active_dev,
+            sys_vk->_query_pool,
+            0,
+            1,
+            sizeof(decode_status),
+            &decode_status,
+            sizeof(decode_status),
+            VK_QUERY_RESULT_WITH_STATUS_BIT_KHR | VK_QUERY_RESULT_WAIT_BIT));
+        ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
+    }
+
+    if (sys_vk->_query_pool != VK_NULL_HANDLE)
+    {
+        vk.DestroyQueryPool(sys_vk->_active_dev, sys_vk->_query_pool, nullptr);
+    }
+    vk.DestroyCommandPool(sys_vk->_active_dev, cmd_pool, nullptr);
     vk.DestroyVideoSessionParametersKHR(sys_vk->_active_dev, video_session_params, nullptr);
-
     for (auto& alloc : session_memory_allocations)
         vmaFreeMemory(sys_vk->_allocator, alloc);
 

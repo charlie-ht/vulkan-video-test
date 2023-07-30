@@ -402,6 +402,8 @@ public:
     std::vector<VkLayerProperties> _available_instance_layers;
     VkInstance _instance { VK_NULL_HANDLE };
 
+    VkDevice _active_dev { VK_NULL_HANDLE };
+    
     std::vector<VkPhysicalDevice> _physical_devices;
     std::vector<VkPhysicalDeviceProperties2> _physical_device_props;
     std::vector<VkPhysicalDeviceIDProperties> _physical_device_id_props;
@@ -426,7 +428,9 @@ public:
     /* Queues */
     std::vector<VkQueueFamilyProperties2> _qf_properties;
     std::vector<VkQueueFamilyVideoPropertiesKHR> _qf_video_properties;
+    std::vector<VkQueueFamilyQueryResultStatusPropertiesKHR> _qf_query_support;
     std::vector<std::vector<pthread_mutex_t>> _qf_mutexs;
+
 
     /**
      * Queue family index for graphics operations, and the number of queues
@@ -468,7 +472,18 @@ public:
     int queue_family_decode_index;
     int nb_decode_queues;
 
-    VkDevice _active_dev { VK_NULL_HANDLE };
+    bool EncodeQueriesAreSupported() const
+    {
+        return _qf_query_support[queue_family_encode_index].queryResultStatusSupport;
+    }
+
+    bool DecodeQueriesAreSupported() const
+    {
+        return _qf_query_support[queue_family_decode_index].queryResultStatusSupport;
+    }
+
+    VkQueryPool _query_pool { VK_NULL_HANDLE };
+    
     std::vector<const char*> _active_dev_enabled_exts;
 
     bool _enable_validation { true };
@@ -996,10 +1011,13 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     assert(qf_properties_count);
     sys_vk._qf_properties.resize(qf_properties_count);
     sys_vk._qf_video_properties.resize(qf_properties_count);
+    sys_vk._qf_query_support.resize(qf_properties_count);
     for (u32 i = 0; i < qf_properties_count; i++)
     {
         sys_vk._qf_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
         sys_vk._qf_video_properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+        sys_vk._qf_query_support[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_QUERY_RESULT_STATUS_PROPERTIES_KHR;
+        sys_vk._qf_video_properties[i].pNext = &sys_vk._qf_query_support[i];
         sys_vk._qf_properties[i].pNext = &sys_vk._qf_video_properties[i];
     }
     vk.GetPhysicalDeviceQueueFamilyProperties2(sys_vk.SelectedPhysicalDevice(), &qf_properties_count, sys_vk._qf_properties.data());
