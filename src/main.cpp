@@ -329,13 +329,19 @@ int main(int argc, char** argv)
     VkVideoSessionParametersKHR video_session_params = VK_NULL_HANDLE;
     VK_CHECK(vk.CreateVideoSessionParametersKHR(sys_vk->_active_dev, &session_params_create_info,
         nullptr, &video_session_params));
-	
+
+    // Used for concurrent usage resources
+    u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
+
     // parse bitstream
-    u64 bitstream_size = 58;
+    u64 bitstream_size = util::AlignUp((VkDeviceSize)58, video_caps.minBitstreamBufferSizeAlignment);
     VkBufferCreateInfo bitstream_buffer_info = {};
     bitstream_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bitstream_buffer_info.pNext = &avc_session_profile_list;
-    bitstream_buffer_info.size = util::AlignUp(bitstream_size, video_caps.minBitstreamBufferSizeAlignment);
+    bitstream_buffer_info.size = bitstream_size;
+    bitstream_buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    bitstream_buffer_info.queueFamilyIndexCount = 2;
+    bitstream_buffer_info.pQueueFamilyIndices = queue_family_indices;
     bitstream_buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR;
     VmaAllocationCreateInfo bitstream_alloc_info = {};
     bitstream_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -355,6 +361,18 @@ int main(int argc, char** argv)
     VK_CHECK(vmaMapMemory(sys_vk->_allocator, bitstream_alloc, &bitstream_mapped));
     memcpy(bitstream_mapped, slice_bytes, sizeof(slice_bytes));
     vmaUnmapMemory(sys_vk->_allocator, bitstream_alloc);
+    VkBufferMemoryBarrier2 bitstream_barrier = {};
+    bitstream_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    bitstream_barrier.pNext = nullptr;
+    bitstream_barrier.srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    bitstream_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    bitstream_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+    bitstream_barrier.dstAccessMask = VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR;
+    bitstream_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bitstream_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bitstream_barrier.buffer = bitstream_buffer;
+    bitstream_barrier.offset = 0;
+    bitstream_barrier.size = bitstream_size;
 
 
 
@@ -378,7 +396,6 @@ int main(int argc, char** argv)
     // For now assume we always use a separate transfer queue.
     ASSERT(sys_vk->queue_family_decode_index != sys_vk->queue_family_tx_index);
     out_image_info.queueFamilyIndexCount = 2;
-    u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
     out_image_info.pQueueFamilyIndices = queue_family_indices;
     VmaAllocationCreateInfo out_image_alloc_info = {};
     out_image_alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
@@ -402,13 +419,38 @@ int main(int argc, char** argv)
     out_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
     out_image_view_info.format = selected_out_format.format;
     out_image_view_info.components = selected_out_format.componentMapping;
-    out_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    out_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     out_image_view_info.subresourceRange.baseMipLevel = 0;
     out_image_view_info.subresourceRange.levelCount = 1;
     out_image_view_info.subresourceRange.baseArrayLayer = 0;
     out_image_view_info.subresourceRange.layerCount = 1;
     VkImageView out_image_view = VK_NULL_HANDLE;
     VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &out_image_view_info, nullptr, &out_image_view));
+    VkVideoPictureResourceInfoKHR out_picture_resource = {};
+    out_picture_resource.sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+    out_picture_resource.pNext = nullptr;
+    out_picture_resource.codedOffset = VkOffset2D{0, 0};
+    out_picture_resource.codedExtent = VkExtent2D{176, 144};
+    out_picture_resource.baseArrayLayer = 0;
+    out_picture_resource.imageViewBinding = out_image_view;
+    VkImageMemoryBarrier2 out_image_barrier = {};
+    out_image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    out_image_barrier.pNext = nullptr;
+    out_image_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    out_image_barrier.srcAccessMask = VK_ACCESS_2_NONE_KHR;
+    out_image_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+    out_image_barrier.dstAccessMask = VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
+    out_image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    out_image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
+    out_image_barrier.image = out_image;
+    out_image_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    out_image_barrier.newLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+    out_image_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    out_image_barrier.subresourceRange.baseMipLevel = 0;
+    out_image_barrier.subresourceRange.levelCount = 1;
+    out_image_barrier.subresourceRange.baseArrayLayer = 0;
+    out_image_barrier.subresourceRange.layerCount = 1;
+
 
     // perform decode algorithm for each AU (**)iop
     // for each frame, submit decode command
@@ -474,6 +516,18 @@ int main(int argc, char** argv)
     coding_ctrl_info.pNext = nullptr;
     coding_ctrl_info.flags = VK_VIDEO_CODING_CONTROL_RESET_BIT_KHR;
     vk.CmdControlVideoCodingKHR(cmd_buf, &coding_ctrl_info);
+
+    VkDependencyInfoKHR out_dep_info = {};
+    out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
+    out_dep_info.pNext = nullptr;
+    out_dep_info.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    out_dep_info.memoryBarrierCount = 0;
+    out_dep_info.pMemoryBarriers = nullptr;
+    out_dep_info.bufferMemoryBarrierCount = 1;
+    out_dep_info.pBufferMemoryBarriers = &bitstream_barrier;
+    out_dep_info.imageMemoryBarrierCount = 1;
+    out_dep_info.pImageMemoryBarriers = &out_image_barrier;
+    vk.CmdPipelineBarrier2KHR(cmd_buf, &out_dep_info);
 
     if (sys_vk->DecodeQueriesAreSupported())
     {
@@ -567,6 +621,7 @@ int main(int argc, char** argv)
         ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
     }
 
+    vk.DestroyFence(sys_vk->_active_dev, fence, nullptr);
     vk.DestroyImageView(sys_vk->_active_dev, out_image_view, nullptr);
     vmaDestroyImage(sys_vk->_allocator, out_image, out_image_alloc);
     vmaDestroyBuffer(sys_vk->_allocator, bitstream_buffer, bitstream_alloc);
