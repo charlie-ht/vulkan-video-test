@@ -136,6 +136,7 @@ int main(int argc, char** argv)
     };
     VkImageUsageFlags dpb_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
     VkImageUsageFlags out_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    out_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
     if (dpb_and_dst_coincide)
     {
         dpb_usage = out_usage | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
@@ -168,10 +169,10 @@ int main(int argc, char** argv)
     session_create_info.flags = 0;
     session_create_info.pVideoProfile = &avc_profile._profile_info;
     session_create_info.pictureFormat = selected_out_format.format;
-    session_create_info.maxCodedExtent = video_caps.maxCodedExtent;
+    session_create_info.maxCodedExtent = VkExtent2D{176,144}; // video_caps.maxCodedExtent;
     session_create_info.referencePictureFormat = selected_dpb_format.format;
-    session_create_info.maxDpbSlots = std::min(video_caps.maxDpbSlots, AVC_MAX_DPB_REF_SLOTS + 1u); // From the H.264 spec, + 1 for the setup slot.
-    session_create_info.maxActiveReferencePictures = std::min(video_caps.maxActiveReferencePictures, (u32)AVC_MAX_DPB_REF_SLOTS);
+    session_create_info.maxDpbSlots = 10; // std::min(video_caps.maxDpbSlots, AVC_MAX_DPB_REF_SLOTS + 1u); // From the H.264 spec, + 1 for the setup slot.
+    session_create_info.maxActiveReferencePictures = 10; // std::min(video_caps.maxActiveReferencePictures, (u32)AVC_MAX_DPB_REF_SLOTS);
     session_create_info.pStdHeaderVersion = &avc_ext_version;
 
     VkVideoSessionKHR video_session = VK_NULL_HANDLE;
@@ -227,7 +228,7 @@ int main(int argc, char** argv)
     avc_std_sps.flags.qpprime_y_zero_transform_bypass_flag = 0;
     avc_std_sps.flags.frame_cropping_flag = 0;
     avc_std_sps.flags.seq_scaling_matrix_present_flag = 0;
-    avc_std_sps.flags.vui_parameters_present_flag = 0;
+    avc_std_sps.flags.vui_parameters_present_flag = 1;
     avc_std_sps.profile_idc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
     avc_std_sps.level_idc = STD_VIDEO_H264_LEVEL_IDC_1_1;
     avc_std_sps.chroma_format_idc = STD_VIDEO_H264_CHROMA_FORMAT_IDC_420;
@@ -257,7 +258,7 @@ int main(int argc, char** argv)
     avc_std_sps_vui.flags.video_signal_type_present_flag = 0;
     avc_std_sps_vui.flags.video_full_range_flag = 0;
     avc_std_sps_vui.flags.color_description_present_flag = 0;
-    avc_std_sps_vui.flags.timing_info_present_flag = 0;
+    avc_std_sps_vui.flags.timing_info_present_flag = 1;
     avc_std_sps_vui.flags.fixed_frame_rate_flag = 0;
     avc_std_sps_vui.flags.bitstream_restriction_flag = 1;
     avc_std_sps_vui.flags.nal_hrd_parameters_present_flag = 0;
@@ -539,7 +540,7 @@ int main(int argc, char** argv)
     avc_picture_info.flags.is_intra = 1;
     avc_picture_info.flags.IdrPicFlag = 0;
     avc_picture_info.flags.bottom_field_flag = 0;
-    avc_picture_info.flags.is_reference = 0;
+    avc_picture_info.flags.is_reference = 1;
     avc_picture_info.flags.complementary_field_pair = 0;
     avc_picture_info.seq_parameter_set_id = 0;
     avc_picture_info.pic_parameter_set_id = 0;
