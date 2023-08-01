@@ -1314,7 +1314,7 @@ bool init_vulkan(SysVulkan& sys_vk)
     load_vk_functions(sys_vk, sys_vk.extensions, true, true);
 
     vk.GetDeviceQueue(sys_vk._active_dev, sys_vk.queue_family_decode_index, 0, &sys_vk._decode_queue0);
-    vk.GetDeviceQueue(sys_vk._active_dev, sys_vk.queue_family_decode_index, 0, &sys_vk._tx_queue0);
+    vk.GetDeviceQueue(sys_vk._active_dev, sys_vk.queue_family_tx_index, 0, &sys_vk._tx_queue0);
     ASSERT(sys_vk._decode_queue0 != VK_NULL_HANDLE && sys_vk._tx_queue0 != VK_NULL_HANDLE);
 
     auto& device_priv = sys_vk._selected_physical_device_priv;

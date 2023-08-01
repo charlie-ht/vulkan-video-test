@@ -1,4 +1,18 @@
-
+/*
+* Copyright 2023 Igalia S.L.
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*    http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
 #include "util.hpp"
 #include "vk.hpp"
 
@@ -22,36 +36,6 @@ int main(int argc, char** argv)
             printf("  --validate-api-calls: enable vulkan validation layer (EXTRA SLOW!)\n");
 			printf("  --device-major-minor=<major>.<minor> : select device by major and minor version (hex)\n");
             printf("  --device-name=<name> : case-insentive substring search of the reported device name to select (e.g. nvidia or amd)\n");
-            printf("The rest is boilerplate\n");
-            printf("  --version: print version\n");
-            printf("  --verbose: print verbose messages\n");
-            printf("  --debug: print debug messages\n");
-            printf("  --trace: print trace messages\n");
-            printf("  --quiet: print no messages\n");
-            printf("  --output <file>: output file\n");
-            printf("  --format <format>: output format\n");
-            printf("  --width <width>: output width\n");
-            printf("  --height <height>: output height\n");
-            printf("  --fps <fps>: output fps\n");
-            printf("  --bitrate <bitrate>: output bitrate\n");
-            printf("  --gop <gop>: output gop\n");
-            printf("  --preset <preset>: output preset\n");
-            printf("  --profile <profile>: output profile\n");
-            printf("  --level <level>: output level\n");
-            printf("  --input <file>: input file\n");
-            printf("  --input-format <format>: input format\n");
-            printf("  --input-width <width>: input width\n");
-            printf("  --input-height <height>: input height\n");
-            printf("  --input-fps <fps>: input fps\n");
-            printf("  --input-bitrate <bitrate>: input bitrate\n");
-            printf("  --input-gop <gop>: input gop\n");
-            printf("  --input-preset <preset>: input preset\n");
-            printf("  --input-profile <profile>: input profile\n");
-            printf("  --input-level <level>: input level\n");
-            printf("  --input-threads <threads>: input threads\n");
-            printf("  --input-queue <queue>: input queue\n");
-            printf("  --input-buffers <buffers>: input buffers\n");
-            printf("  --input-delay\n");
 			exit(0);
         } else if (util::StrHasPrefix(argv[arg], "--device-name=")) {
             requested_device_name = util::StrRemovePrefix(argv[arg], "--device-name=");
@@ -469,35 +453,41 @@ int main(int argc, char** argv)
         query_pool_info.pipelineStatistics = 0;
         VK_CHECK(vk.CreateQueryPool(sys_vk->_active_dev, &query_pool_info, nullptr, &sys_vk->_query_pool));
     }
-    VkCommandPool cmd_pool = VK_NULL_HANDLE;
+    VkCommandPool decode_cmd_pool = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo cmd_pool_info = {};
     cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cmd_pool_info.pNext = nullptr;
     cmd_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cmd_pool_info.queueFamilyIndex = sys_vk->queue_family_decode_index;
-    VK_CHECK(vk.CreateCommandPool(sys_vk->_active_dev, &cmd_pool_info, nullptr, &cmd_pool));
+    VK_CHECK(vk.CreateCommandPool(sys_vk->_active_dev, &cmd_pool_info, nullptr, &decode_cmd_pool));
+    VkCommandPool tx_cmd_pool = VK_NULL_HANDLE;
+    cmd_pool_info.queueFamilyIndex = sys_vk->queue_family_tx_index;
+    VK_CHECK(vk.CreateCommandPool(sys_vk->_active_dev, &cmd_pool_info, nullptr, &tx_cmd_pool));
 
-    VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+    VkCommandBuffer decode_cmd_buf = VK_NULL_HANDLE;
+    VkCommandBuffer tx_cmd_buf = VK_NULL_HANDLE;
     VkCommandBufferAllocateInfo cmd_buf_alloc_info = {};
     cmd_buf_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmd_buf_alloc_info.pNext = nullptr;
-    cmd_buf_alloc_info.commandPool = cmd_pool;
+    cmd_buf_alloc_info.commandPool = decode_cmd_pool;
     cmd_buf_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmd_buf_alloc_info.commandBufferCount = 1;
-    VK_CHECK(vk.AllocateCommandBuffers(sys_vk->_active_dev, &cmd_buf_alloc_info, &cmd_buf));
-
+    VK_CHECK(vk.AllocateCommandBuffers(sys_vk->_active_dev, &cmd_buf_alloc_info, &decode_cmd_buf));
+    cmd_buf_alloc_info.commandPool = tx_cmd_pool;
+    VK_CHECK(vk.AllocateCommandBuffers(sys_vk->_active_dev, &cmd_buf_alloc_info, &tx_cmd_buf));
     VkCommandBufferBeginInfo cmd_buf_begin_info = {};
     cmd_buf_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     cmd_buf_begin_info.pNext = nullptr;
     cmd_buf_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     cmd_buf_begin_info.pInheritanceInfo = nullptr;
-    vk.BeginCommandBuffer(cmd_buf, &cmd_buf_begin_info);
+
+    vk.BeginCommandBuffer(decode_cmd_buf, &cmd_buf_begin_info);
 
 
     // Queries
     if (sys_vk->DecodeQueriesAreSupported())
     {
-        vk.CmdResetQueryPool(cmd_buf, sys_vk->_query_pool, 0, 1);
+        vk.CmdResetQueryPool(decode_cmd_buf, sys_vk->_query_pool, 0, 1);
     }
 
 
@@ -508,15 +498,20 @@ int main(int argc, char** argv)
     begin_coding_info.flags = 0;
     begin_coding_info.videoSession = video_session;
     begin_coding_info.videoSessionParameters = video_session_params;
-    begin_coding_info.referenceSlotCount = 0;
-    begin_coding_info.pReferenceSlots = nullptr;
-    vk.CmdBeginVideoCodingKHR(cmd_buf, &begin_coding_info);
+    VkVideoReferenceSlotInfoKHR reference_slot = {};
+    reference_slot.sType = VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR;
+    reference_slot.pNext = nullptr;
+    reference_slot.slotIndex = -1;
+    reference_slot.pPictureResource = &out_picture_resource;
+    begin_coding_info.referenceSlotCount = 1;
+    begin_coding_info.pReferenceSlots = &reference_slot;
+    vk.CmdBeginVideoCodingKHR(decode_cmd_buf, &begin_coding_info);
 
     VkVideoCodingControlInfoKHR coding_ctrl_info = {};
     coding_ctrl_info.sType = VK_STRUCTURE_TYPE_VIDEO_CODING_CONTROL_INFO_KHR;
     coding_ctrl_info.pNext = nullptr;
     coding_ctrl_info.flags = VK_VIDEO_CODING_CONTROL_RESET_BIT_KHR;
-    vk.CmdControlVideoCodingKHR(cmd_buf, &coding_ctrl_info);
+    vk.CmdControlVideoCodingKHR(decode_cmd_buf, &coding_ctrl_info);
 
     VkDependencyInfoKHR out_dep_info = {};
     out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
@@ -528,11 +523,11 @@ int main(int argc, char** argv)
     out_dep_info.pBufferMemoryBarriers = &bitstream_barrier;
     out_dep_info.imageMemoryBarrierCount = 1;
     out_dep_info.pImageMemoryBarriers = &out_image_barrier;
-    vk.CmdPipelineBarrier2KHR(cmd_buf, &out_dep_info);
+    vk.CmdPipelineBarrier2KHR(decode_cmd_buf, &out_dep_info);
 
     if (sys_vk->DecodeQueriesAreSupported())
     {
-        vk.CmdBeginQuery(cmd_buf, sys_vk->_query_pool, 0, VkQueryControlFlags());
+        vk.CmdBeginQuery(decode_cmd_buf, sys_vk->_query_pool, 0, VkQueryControlFlags());
     }
 
     StdVideoDecodeH264PictureInfo avc_picture_info = {};
@@ -569,24 +564,38 @@ int main(int argc, char** argv)
     decode_info.dstPictureResource.codedOffset = VkOffset2D{ 0, 0 };
     decode_info.dstPictureResource.baseArrayLayer = 0;
     decode_info.dstPictureResource.imageViewBinding = out_image_view;
-    decode_info.pSetupReferenceSlot = nullptr;
+    VkVideoDecodeH264DpbSlotInfoKHR dpb_slot_info = {};
+    dpb_slot_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_DPB_SLOT_INFO_KHR;
+    dpb_slot_info.pNext = nullptr;
+    StdVideoDecodeH264ReferenceInfo ref_info = {};
+    ref_info.flags.top_field_flag = 0;
+    ref_info.flags.bottom_field_flag = 0;
+    ref_info.flags.used_for_long_term_reference = 0;
+    ref_info.flags.is_non_existing = 0;
+    ref_info.FrameNum = 0;
+    ref_info.PicOrderCnt[0] = 0;
+    ref_info.PicOrderCnt[1] = 0;
+    dpb_slot_info.pStdReferenceInfo = &ref_info;
+    reference_slot.pNext = &dpb_slot_info;
+    reference_slot.slotIndex = 0;
+    decode_info.pSetupReferenceSlot = &reference_slot;
     decode_info.referenceSlotCount = 0;
     decode_info.pReferenceSlots = nullptr;
-    vk.CmdDecodeVideoKHR(cmd_buf, &decode_info);
+    vk.CmdDecodeVideoKHR(decode_cmd_buf, &decode_info);
 
     if (sys_vk->DecodeQueriesAreSupported())
     {
-        vk.CmdEndQuery(cmd_buf, sys_vk->_query_pool, 0);
+        vk.CmdEndQuery(decode_cmd_buf, sys_vk->_query_pool, 0);
     }
 
     VkVideoEndCodingInfoKHR end_coding_info = {};
     end_coding_info.sType = VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR;
     end_coding_info.pNext = nullptr;
     end_coding_info.flags = 0;    
-    vk.CmdEndVideoCodingKHR(cmd_buf, &end_coding_info);
+    vk.CmdEndVideoCodingKHR(decode_cmd_buf, &end_coding_info);
     //;;;;;;;;;;; Video coding scope end
 
-    vk.EndCommandBuffer(cmd_buf);
+    vk.EndCommandBuffer(decode_cmd_buf);
 
     VkFenceCreateInfo fence_info = {};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -601,13 +610,12 @@ int main(int argc, char** argv)
     submit_info.pWaitSemaphores = nullptr;
     submit_info.pWaitDstStageMask = 0;
     submit_info.commandBufferCount = 1;
-    submit_info.pCommandBuffers = &cmd_buf;
+    submit_info.pCommandBuffers = &decode_cmd_buf;
     submit_info.signalSemaphoreCount = 0;
     submit_info.pSignalSemaphores = nullptr;
     VK_CHECK(vk.QueueSubmit(sys_vk->_decode_queue0, 1, &submit_info, fence));
     VK_CHECK(vk.WaitForFences(sys_vk->_active_dev, 1, &fence, VK_TRUE, UINT64_MAX));
 
-    // todo: this just hangs...
     if (sys_vk->DecodeQueriesAreSupported())
     {
         VkQueryResultStatusKHR decode_status;
@@ -622,15 +630,162 @@ int main(int argc, char** argv)
         ASSERT(decode_status == VK_QUERY_RESULT_STATUS_COMPLETE_KHR);
     }
 
+    vk.ResetFences(sys_vk->_active_dev, 1, &fence);
+    VkBufferCreateInfo luma_buf_create_info = {};
+    luma_buf_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    luma_buf_create_info.pNext = &avc_session_profile_list;
+    luma_buf_create_info.size = 32768; // todo
+    luma_buf_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    luma_buf_create_info.queueFamilyIndexCount = 0;
+    luma_buf_create_info.pQueueFamilyIndices = nullptr;
+    luma_buf_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo luma_buf_alloc_info = {};
+    luma_buf_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
+    // I can use uncached combined memory for extra performance.
+    luma_buf_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+    VkBuffer luma_buf = VK_NULL_HANDLE;
+    VmaAllocation luma_buf_alloc = VK_NULL_HANDLE;
+    vmaCreateBuffer(sys_vk->_allocator,
+        &luma_buf_create_info,
+        &luma_buf_alloc_info,
+        &luma_buf,
+        &luma_buf_alloc,
+        nullptr);
+    VkBufferCreateInfo chroma_buf_create_info = {};
+    chroma_buf_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    chroma_buf_create_info.pNext = &avc_session_profile_list;
+    chroma_buf_create_info.size = 16384; // todo
+    chroma_buf_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    chroma_buf_create_info.queueFamilyIndexCount = 0;
+    chroma_buf_create_info.pQueueFamilyIndices = nullptr;
+    chroma_buf_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo chroma_buf_alloc_info = {};
+    chroma_buf_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
+    // I can use uncached combined memory for extra performance.
+    chroma_buf_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+    VkBuffer chroma_buf = VK_NULL_HANDLE;
+    VmaAllocation chroma_buf_alloc = VK_NULL_HANDLE;
+    vmaCreateBuffer(sys_vk->_allocator,
+        &chroma_buf_create_info,
+        &chroma_buf_alloc_info,
+        &chroma_buf,
+        &chroma_buf_alloc,
+        nullptr);
+    vk.BeginCommandBuffer(tx_cmd_buf, &cmd_buf_begin_info);
+    out_image_barrier = {};
+    out_image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    out_image_barrier.pNext = nullptr;
+    out_image_barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    out_image_barrier.srcAccessMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    out_image_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR;
+    out_image_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    out_image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    out_image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
+    out_image_barrier.image = out_image;
+    out_image_barrier.oldLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+    out_image_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    out_image_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    out_image_barrier.subresourceRange.baseMipLevel = 0;
+    out_image_barrier.subresourceRange.levelCount = 1;
+    out_image_barrier.subresourceRange.baseArrayLayer = 0;
+    out_image_barrier.subresourceRange.layerCount = 1;
+    out_dep_info = {};
+    out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
+    out_dep_info.pNext = nullptr;
+    out_dep_info.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    out_dep_info.memoryBarrierCount = 0;
+    out_dep_info.pMemoryBarriers = nullptr;
+    out_dep_info.bufferMemoryBarrierCount = 0;
+    out_dep_info.pBufferMemoryBarriers = nullptr;
+    out_dep_info.imageMemoryBarrierCount = 1;
+    out_dep_info.pImageMemoryBarriers = &out_image_barrier;
+    vk.CmdPipelineBarrier2KHR(tx_cmd_buf, &out_dep_info);
+
+    u32 luma_width_samples = 176;
+    u32 luma_buf_pitch = 192;
+    u32 luma_buf_height = 144;
+    VkBufferImageCopy luma_copy_region = {};
+    luma_copy_region.bufferOffset = 0;
+    luma_copy_region.bufferRowLength = luma_buf_pitch;
+    luma_copy_region.bufferImageHeight = luma_buf_height;
+    luma_copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
+    luma_copy_region.imageSubresource.mipLevel = 0;
+    luma_copy_region.imageSubresource.baseArrayLayer = 0;
+    luma_copy_region.imageSubresource.layerCount = 1;
+    luma_copy_region.imageOffset = { 0, 0, 0 };
+    luma_copy_region.imageExtent = { luma_width_samples, luma_buf_height, 1 };
+    vk.CmdCopyImageToBuffer(tx_cmd_buf, out_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        luma_buf, 1, &luma_copy_region);
+    
+    u32 chroma_width_samples = 176 / 2;
+    u32 chroma_buf_pitch = 96;
+    u32 chroma_buf_height = 144 / 2;
+    VkBufferImageCopy chroma_copy_region = {};
+    chroma_copy_region.bufferOffset = 0;
+    chroma_copy_region.bufferRowLength = chroma_buf_pitch;
+    chroma_copy_region.bufferImageHeight = chroma_buf_height;
+    chroma_copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+    chroma_copy_region.imageSubresource.mipLevel = 0;
+    chroma_copy_region.imageSubresource.baseArrayLayer = 0;
+    chroma_copy_region.imageSubresource.layerCount = 1;
+    chroma_copy_region.imageOffset = { 0, 0, 0 };
+    chroma_copy_region.imageExtent = { chroma_width_samples, chroma_buf_height, 1 };
+    vk.CmdCopyImageToBuffer(tx_cmd_buf, out_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        chroma_buf, 1, &chroma_copy_region);
+
+    vk.EndCommandBuffer(tx_cmd_buf);
+
+    submit_info = {};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = nullptr;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = nullptr;
+    submit_info.pWaitDstStageMask = 0;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &tx_cmd_buf;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = nullptr;
+    VK_CHECK(vk.QueueSubmit(sys_vk->_tx_queue0, 1, &submit_info, fence));
+    VK_CHECK(vk.WaitForFences(sys_vk->_active_dev, 1, &fence, VK_TRUE, UINT64_MAX));
+
+    FILE* out_file = fopen("/tmp/vd.yuv", "wb");
+
+    void* luma_buf_data = nullptr;
+    void* chroma_buf_data = nullptr;
+    vmaMapMemory(sys_vk->_allocator, luma_buf_alloc, &luma_buf_data);
+    u8* luma_buf_bytes = (u8*)luma_buf_data;
+    u32 bytes_written = 0;
+    // Output the frame data in NV12 format
+    for (int line = 0; line < luma_buf_height; line++)
+    {
+        bytes_written += fwrite(luma_buf_bytes + line * luma_buf_pitch, 1, luma_width_samples, out_file);
+    }
+    ASSERT(bytes_written == luma_width_samples * luma_buf_height);
+    vmaUnmapMemory(sys_vk->_allocator, luma_buf_alloc);
+    vmaMapMemory(sys_vk->_allocator, chroma_buf_alloc, &chroma_buf_data);
+    u8* chroma_buf_bytes = (u8*)chroma_buf_data;
+    for (int line = 0; line < chroma_buf_height; line++)
+    {
+        bytes_written += fwrite(chroma_buf_bytes + line * chroma_buf_pitch * sizeof(u16), 1, chroma_width_samples * sizeof(u16), out_file);
+    }
+    ASSERT(bytes_written == luma_width_samples * luma_buf_height + 2 * (chroma_width_samples * chroma_buf_height));
+    vmaUnmapMemory(sys_vk->_allocator, chroma_buf_alloc);
+    fclose(out_file);
+
     vk.DestroyFence(sys_vk->_active_dev, fence, nullptr);
     vk.DestroyImageView(sys_vk->_active_dev, out_image_view, nullptr);
     vmaDestroyImage(sys_vk->_allocator, out_image, out_image_alloc);
+    vmaDestroyBuffer(sys_vk->_allocator, luma_buf, luma_buf_alloc);
+    vmaDestroyBuffer(sys_vk->_allocator, chroma_buf, chroma_buf_alloc);
     vmaDestroyBuffer(sys_vk->_allocator, bitstream_buffer, bitstream_alloc);
     if (sys_vk->_query_pool != VK_NULL_HANDLE)
     {
         vk.DestroyQueryPool(sys_vk->_active_dev, sys_vk->_query_pool, nullptr);
     }
-    vk.DestroyCommandPool(sys_vk->_active_dev, cmd_pool, nullptr);
+    vk.DestroyCommandPool(sys_vk->_active_dev, tx_cmd_pool, nullptr);
+    vk.DestroyCommandPool(sys_vk->_active_dev, decode_cmd_pool, nullptr);
     vk.DestroyVideoSessionParametersKHR(sys_vk->_active_dev, video_session_params, nullptr);
     for (auto& alloc : session_memory_allocations)
         vmaFreeMemory(sys_vk->_allocator, alloc);
