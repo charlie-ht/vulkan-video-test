@@ -57,3 +57,12 @@ auto get_vector_noerror(F&& f, Ts&&... ts) -> std::vector<T>
     results.resize(count);
     return results;
 }
+
+void vk_print(VkImageUsageFlags flags)
+{
+    if (flags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) printf("TRANSFER_SRC_BIT ");
+    if (flags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) printf("TRANSFER_DST_BIT ");
+    if (flags & VK_IMAGE_USAGE_SAMPLED_BIT) printf("SAMPLED_BIT ");
+    if (flags & VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR) printf("DECODE_DPB_BIT_KHR ");
+    if (flags & VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR) printf("DECODE_DST_BIT_KHR ");
+}
