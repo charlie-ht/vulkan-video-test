@@ -1442,6 +1442,16 @@ TransitionUseCase DpbImageInitialize = {
     VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
     VK_IMAGE_ASPECT_COLOR_BIT
 };
+TransitionUseCase DpbImageBeginTransferToHost = {
+    VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+    VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+    VK_ACCESS_2_NONE_KHR,
+    VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+    VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    VK_IMAGE_ASPECT_COLOR_BIT
+};
+
 TransitionUseCase DstImageInitialize = {
     VK_PIPELINE_STAGE_2_NONE_KHR,
     VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
@@ -1451,6 +1461,18 @@ TransitionUseCase DstImageInitialize = {
     VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
     VK_IMAGE_ASPECT_COLOR_BIT
 };
+
+TransitionUseCase DstImageBeginTransferToHost = {
+    VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+    VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+    VK_ACCESS_2_NONE_KHR,
+    VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
+    VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    VK_IMAGE_ASPECT_COLOR_BIT
+};
+
+
 TransitionUseCase BufferPrepareForRead = {
     VK_PIPELINE_STAGE_2_HOST_BIT,
     VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
@@ -1490,6 +1512,24 @@ struct ImageResource
         r.subresourceRange.baseArrayLayer = 0;
         r.subresourceRange.layerCount = 1;
         return r;
+    }
+
+    void CopyToBuffer(vvb::SysVulkan* sys_vk, VkCommandBuffer cmd_buf, u32 width_samples,
+        u32 buf_pitch, u32 buf_height, VkImageAspectFlags aspect_mask, VkBuffer buffer)
+    {
+        auto& vk = sys_vk->_vfn;
+        VkBufferImageCopy luma_copy_region = {};
+        luma_copy_region.bufferOffset = 0;
+        luma_copy_region.bufferRowLength = buf_pitch;
+        luma_copy_region.bufferImageHeight = buf_height;
+        luma_copy_region.imageSubresource.aspectMask = aspect_mask;
+        luma_copy_region.imageSubresource.mipLevel = 0;
+        luma_copy_region.imageSubresource.baseArrayLayer = 0;
+        luma_copy_region.imageSubresource.layerCount = 1;
+        luma_copy_region.imageOffset = { 0, 0, 0 };
+        luma_copy_region.imageExtent = { width_samples, buf_height, 1 };
+        vk.CmdCopyImageToBuffer(cmd_buf, _image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            buffer, 1, &luma_copy_region);
     }
 };
 ImageResource CreateImageResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 height,
@@ -1554,7 +1594,7 @@ void DestroyImageResource(vvb::SysVulkan* sys_vk, ImageResource* r)
     vmaDestroyImage(sys_vk->_allocator, r->_image, r->_allocation);
 }
 
-struct BitstreamResource
+struct BufferResource
 {
     VkBuffer _buffer;
     VmaAllocation _allocation;
@@ -1578,21 +1618,23 @@ struct BitstreamResource
         return r;
     }
 };
-BitstreamResource CreateBitstreamResource(vvb::SysVulkan* sys_vk, VkDeviceSize size, VkVideoProfileListInfoKHR* profile_list = nullptr)
+BufferResource CreateBufferResource(vvb::SysVulkan* sys_vk, VkDeviceSize size,
+    VkBufferUsageFlags usage, VmaMemoryUsage mem_usage, VmaAllocationCreateFlags alloc_flags = 0,
+    VkVideoProfileListInfoKHR* profile_list = nullptr)
 {
-    BitstreamResource r = {};
+    BufferResource r = {};
 
     r._create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     r._create_info.pNext = profile_list;
     r._create_info.size = size;
     r._create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    r._create_info.queueFamilyIndexCount = 1;
-    r._create_info.pQueueFamilyIndices = (u32*)&sys_vk->queue_family_decode_index;
-    r._create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR;
-    r._alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    r._create_info.queueFamilyIndexCount = 0;
+    r._create_info.pQueueFamilyIndices = nullptr;
+    r._create_info.usage = usage;
+    r._alloc_info.usage = mem_usage;
     // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
     // I can use uncached combined memory for extra performance.
-    r._alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    r._alloc_info.flags = alloc_flags;
     vmaCreateBuffer(sys_vk->_allocator,
         &r._create_info,
         &r._alloc_info,
@@ -1601,7 +1643,7 @@ BitstreamResource CreateBitstreamResource(vvb::SysVulkan* sys_vk, VkDeviceSize s
         nullptr);
     return r;
 }
-void DestroyBitstreamResource(vvb::SysVulkan* sys_vk, BitstreamResource* r)
+void DestroyBufferResource(vvb::SysVulkan* sys_vk, BufferResource* r)
 {
     vmaDestroyBuffer(sys_vk->_allocator, r->_buffer, r->_allocation);
 }

@@ -156,7 +156,11 @@ int main(int argc, char** argv)
     vvb::AddSessionParameters(sys_vk, &coding_session);
 
     u64 bitstream_size = util::AlignUp((VkDeviceSize)58, video_caps.minBitstreamBufferSizeAlignment);
-    auto bitstream = vvb::CreateBitstreamResource(sys_vk, bitstream_size, &avc_session_profile_list);
+    auto bitstream = vvb::CreateBufferResource(sys_vk, bitstream_size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR,
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        &avc_session_profile_list);
 
     u8 slice_bytes[] = {0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x3a, 0xfe, 0xe6, 0xc0, 0xf9, 0x96, 0x55, 0x0d, 0x57, 0x7f, 0xfd, 0x69, 0x3d, 0x2b, 0xf8, 0xcd, 0x22, 0xe5, 0x25, 0xe2, 0x93, 0x0c, 0xad, 0xe0, 0xfa, 0x71, 0x00, 0xcb, 0x99, 0xd1, 0xd6, 0xb5, 0x9b, 0xed, 0x6f, 0x8b, 0x38, 0xa7, 0xdc, 0xe1, 0x90, 0x01, 0x6e, 0x00, 0x10, 0xd0, 0x9a, 0xf3, 0x63, 0x3f, 0x81, 0x00};
     void* bitstream_mapped = nullptr;
@@ -380,111 +384,46 @@ int main(int argc, char** argv)
     }
 
     vk.ResetFences(sys_vk->_active_dev, 1, &fence);
-    VkBufferCreateInfo luma_buf_create_info = {};
-    luma_buf_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    luma_buf_create_info.pNext = &avc_session_profile_list;
-    luma_buf_create_info.size = 32768; // todo
-    luma_buf_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    luma_buf_create_info.queueFamilyIndexCount = 0;
-    luma_buf_create_info.pQueueFamilyIndices = nullptr;
-    luma_buf_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    VmaAllocationCreateInfo luma_buf_alloc_info = {};
-    luma_buf_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-    // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
-    // I can use uncached combined memory for extra performance.
-    luma_buf_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-    VkBuffer luma_buf = VK_NULL_HANDLE;
-    VmaAllocation luma_buf_alloc = VK_NULL_HANDLE;
-    vmaCreateBuffer(sys_vk->_allocator,
-        &luma_buf_create_info,
-        &luma_buf_alloc_info,
-        &luma_buf,
-        &luma_buf_alloc,
-        nullptr);
-    VkBufferCreateInfo chroma_buf_create_info = {};
-    chroma_buf_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    chroma_buf_create_info.pNext = &avc_session_profile_list;
-    chroma_buf_create_info.size = 16384; // todo
-    chroma_buf_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    chroma_buf_create_info.queueFamilyIndexCount = 0;
-    chroma_buf_create_info.pQueueFamilyIndices = nullptr;
-    chroma_buf_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    VmaAllocationCreateInfo chroma_buf_alloc_info = {};
-    chroma_buf_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-    // Note! This is rather subtle. Since I don't intend to read the bitstream back to the CPU, it seems
-    // I can use uncached combined memory for extra performance.
-    chroma_buf_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-    VkBuffer chroma_buf = VK_NULL_HANDLE;
-    VmaAllocation chroma_buf_alloc = VK_NULL_HANDLE;
-    vmaCreateBuffer(sys_vk->_allocator,
-        &chroma_buf_create_info,
-        &chroma_buf_alloc_info,
-        &chroma_buf,
-        &chroma_buf_alloc,
-        nullptr);
+
+    auto luma_buf = vvb::CreateBufferResource(sys_vk, 32768,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+        &avc_session_profile_list);
+    auto chroma_buf = vvb::CreateBufferResource(sys_vk, 16384,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+        &avc_session_profile_list);
 
     vk.BeginCommandBuffer(tx_cmd_buf, &cmd_buf_begin_info);
-    VkImageMemoryBarrier2 out_image_barrier = {};
-    out_image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    out_image_barrier.pNext = nullptr;
-    out_image_barrier.srcStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-    out_image_barrier.srcAccessMask = VK_ACCESS_2_NONE_KHR;
-    out_image_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR;
-    out_image_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    out_image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    out_image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
-    out_image_barrier.image = out_image_resource._image;
-    out_image_barrier.oldLayout = dpb_and_dst_coincide ? VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR : VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
-    out_image_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    out_image_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    out_image_barrier.subresourceRange.baseMipLevel = 0;
-    out_image_barrier.subresourceRange.levelCount = 1;
-    out_image_barrier.subresourceRange.baseArrayLayer = 0;
-    out_image_barrier.subresourceRange.layerCount = 1;
-    out_dep_info = {};
-    out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
-    out_dep_info.pNext = nullptr;
-    out_dep_info.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-    out_dep_info.memoryBarrierCount = 0;
-    out_dep_info.pMemoryBarriers = nullptr;
-    out_dep_info.bufferMemoryBarrierCount = 0;
-    out_dep_info.pBufferMemoryBarriers = nullptr;
-    out_dep_info.imageMemoryBarrierCount = 1;
-    out_dep_info.pImageMemoryBarriers = &out_image_barrier;
-    vk.CmdPipelineBarrier2KHR(tx_cmd_buf, &out_dep_info);
+        VkImageMemoryBarrier2 out_image_barrier = dpb_and_dst_coincide ? 
+            out_image_resource.Barrier(vvb::DpbImageBeginTransferToHost) :
+            out_image_resource.Barrier(vvb::DstImageBeginTransferToHost);
 
-    u32 luma_width_samples = 176;
-    u32 luma_buf_pitch = 192;
-    u32 luma_buf_height = 144;
-    VkBufferImageCopy luma_copy_region = {};
-    luma_copy_region.bufferOffset = 0;
-    luma_copy_region.bufferRowLength = luma_buf_pitch;
-    luma_copy_region.bufferImageHeight = luma_buf_height;
-    luma_copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT;
-    luma_copy_region.imageSubresource.mipLevel = 0;
-    luma_copy_region.imageSubresource.baseArrayLayer = 0;
-    luma_copy_region.imageSubresource.layerCount = 1;
-    luma_copy_region.imageOffset = { 0, 0, 0 };
-    luma_copy_region.imageExtent = { luma_width_samples, luma_buf_height, 1 };
-    vk.CmdCopyImageToBuffer(tx_cmd_buf, out_image_resource._image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        luma_buf, 1, &luma_copy_region);
-    
-    u32 chroma_width_samples = 176 / 2;
-    u32 chroma_buf_pitch = 96;
-    u32 chroma_buf_height = 144 / 2;
-    VkBufferImageCopy chroma_copy_region = {};
-    chroma_copy_region.bufferOffset = 0;
-    chroma_copy_region.bufferRowLength = chroma_buf_pitch;
-    chroma_copy_region.bufferImageHeight = chroma_buf_height;
-    chroma_copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
-    chroma_copy_region.imageSubresource.mipLevel = 0;
-    chroma_copy_region.imageSubresource.baseArrayLayer = 0;
-    chroma_copy_region.imageSubresource.layerCount = 1;
-    chroma_copy_region.imageOffset = { 0, 0, 0 };
-    chroma_copy_region.imageExtent = { chroma_width_samples, chroma_buf_height, 1 };
-    vk.CmdCopyImageToBuffer(tx_cmd_buf, out_image_resource._image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        chroma_buf, 1, &chroma_copy_region);
+        out_dep_info = {};
+        out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
+        out_dep_info.pNext = nullptr;
+        out_dep_info.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        out_dep_info.memoryBarrierCount = 0;
+        out_dep_info.pMemoryBarriers = nullptr;
+        out_dep_info.bufferMemoryBarrierCount = 0;
+        out_dep_info.pBufferMemoryBarriers = nullptr;
+        out_dep_info.imageMemoryBarrierCount = 1;
+        out_dep_info.pImageMemoryBarriers = &out_image_barrier;
+        vk.CmdPipelineBarrier2KHR(tx_cmd_buf, &out_dep_info);
 
+        u32 luma_width_samples = 176;
+        u32 luma_buf_pitch = 192;
+        u32 luma_buf_height = 144;
+        out_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, luma_width_samples, luma_buf_pitch, luma_buf_height,
+            VK_IMAGE_ASPECT_PLANE_0_BIT, luma_buf._buffer);
+        
+        u32 chroma_width_samples = luma_width_samples / 2;
+        u32 chroma_buf_pitch = luma_buf_pitch / 2;
+        u32 chroma_buf_height = luma_buf_height / 2;
+        out_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, chroma_width_samples, chroma_buf_pitch, chroma_buf_height,
+            VK_IMAGE_ASPECT_PLANE_1_BIT, chroma_buf._buffer);
     vk.EndCommandBuffer(tx_cmd_buf);
 
     submit_info = {};
@@ -504,7 +443,7 @@ int main(int argc, char** argv)
 
     void* luma_buf_data = nullptr;
     void* chroma_buf_data = nullptr;
-    vmaMapMemory(sys_vk->_allocator, luma_buf_alloc, &luma_buf_data);
+    vmaMapMemory(sys_vk->_allocator, luma_buf._allocation, &luma_buf_data);
     u8* luma_buf_bytes = (u8*)luma_buf_data;
     u32 bytes_written = 0;
     // Output the frame data in NV12 format
@@ -513,15 +452,15 @@ int main(int argc, char** argv)
         bytes_written += fwrite(luma_buf_bytes + line * luma_buf_pitch, 1, luma_width_samples, out_file);
     }
     ASSERT(bytes_written == luma_width_samples * luma_buf_height);
-    vmaUnmapMemory(sys_vk->_allocator, luma_buf_alloc);
-    vmaMapMemory(sys_vk->_allocator, chroma_buf_alloc, &chroma_buf_data);
+    vmaUnmapMemory(sys_vk->_allocator, luma_buf._allocation);
+    vmaMapMemory(sys_vk->_allocator, chroma_buf._allocation, &chroma_buf_data);
     u8* chroma_buf_bytes = (u8*)chroma_buf_data;
     for (int line = 0; line < chroma_buf_height; line++)
     {
         bytes_written += fwrite(chroma_buf_bytes + line * chroma_buf_pitch * sizeof(u16), 1, chroma_width_samples * sizeof(u16), out_file);
     }
     ASSERT(bytes_written == luma_width_samples * luma_buf_height + 2 * (chroma_width_samples * chroma_buf_height));
-    vmaUnmapMemory(sys_vk->_allocator, chroma_buf_alloc);
+    vmaUnmapMemory(sys_vk->_allocator, chroma_buf._allocation);
     fclose(out_file);
 
     vk.DestroyFence(sys_vk->_active_dev, fence, nullptr);
@@ -529,9 +468,10 @@ int main(int argc, char** argv)
     if (!dpb_and_dst_coincide)
         vvb::DestroyImageResource(sys_vk, &dst_image_resource);
 
-    vmaDestroyBuffer(sys_vk->_allocator, luma_buf, luma_buf_alloc);
-    vmaDestroyBuffer(sys_vk->_allocator, chroma_buf, chroma_buf_alloc);
-    vvb::DestroyBitstreamResource(sys_vk, &bitstream);
+    vvb::DestroyBufferResource(sys_vk, &luma_buf);
+    vvb::DestroyBufferResource(sys_vk, &chroma_buf);
+    vvb::DestroyBufferResource(sys_vk, &bitstream);
+
     if (sys_vk->_query_pool != VK_NULL_HANDLE)
     {
         vk.DestroyQueryPool(sys_vk->_active_dev, sys_vk->_query_pool, nullptr);
