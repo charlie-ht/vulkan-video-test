@@ -70,10 +70,7 @@
                 //     "name": "VK_INSTANCE_LAYERS",
                 //     "value": ":VK_LAYER_LUNARG_gfxreconstruct",
                 // },
-                // {
-                //     "name": "VK_LAYER_SETTINGS_PATH",
-                //     "value": "${env:HOME}/cts/vk_layer_settings.txt"
-                // },
+                "VK_LAYER_SETTINGS_PATH": "${env:HOME}/cts/vk_layer_settings.txt",
                 "VK_LAYER_PATH": "${env:HOME}/cts/root/share/vulkan/explicit_layer.d:${env:HOME}/cts/root/etc/vulkan/explicit_layer.d",
                 "LD_LIBRARY_PATH": "${env:HOME}/cts/root/lib:/home/cturner/cts/root/lib/x86_64-linux-gnu"
             },
@@ -86,6 +83,7 @@
             "args": ["--device-name=nvidia"],
             "cwd": "${workspaceFolder}/data",
             "env": {
+                "VK_LAYER_SETTINGS_PATH": "${env:HOME}/cts/vk_layer_settings.txt",
                 "VK_LAYER_PATH": "${env:HOME}/cts/root/share/vulkan/explicit_layer.d:${env:HOME}/cts/root/etc/vulkan/explicit_layer.d",
                 "LD_LIBRARY_PATH": "${env:HOME}/cts/root/lib:/home/cturner/cts/root/lib/x86_64-linux-gnu"
             },
