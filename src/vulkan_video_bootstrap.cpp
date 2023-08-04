@@ -1422,214 +1422,120 @@ VideoProfile Av1Progressive420Profile()
     return av1_profile;
 }
 
-struct TransitionUseCase
+enum TransitionType
 {
-    VkPipelineStageFlags2 src_stage;
-    VkPipelineStageFlags2 dst_stage;
-    VkAccessFlags2 src_access;
-    VkAccessFlags2 dst_access;
-    VkImageLayout old_layout;
-    VkImageLayout new_layout;
-    VkImageAspectFlags aspect_mask;
+    TRANSITION_IMAGE_INITIALIZE,
+    TRANSITION_IMAGE_TRANSFER_TO_HOST,
+    TRANSITION_BUFFER_FOR_READING,
 };
-
-TransitionUseCase DpbImageInitialize = {
-    VK_PIPELINE_STAGE_2_NONE_KHR,
-    VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
-    VK_ACCESS_2_NONE_KHR,
-    VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR,
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
-    VK_IMAGE_ASPECT_COLOR_BIT
-};
-TransitionUseCase DpbImageBeginTransferToHost = {
-    VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-    VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-    VK_ACCESS_2_NONE_KHR,
-    VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
-    VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_ASPECT_COLOR_BIT
-};
-
-TransitionUseCase DstImageInitialize = {
-    VK_PIPELINE_STAGE_2_NONE_KHR,
-    VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
-    VK_ACCESS_2_NONE_KHR,
-    VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR,
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
-    VK_IMAGE_ASPECT_COLOR_BIT
-};
-
-TransitionUseCase DstImageBeginTransferToHost = {
-    VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-    VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-    VK_ACCESS_2_NONE_KHR,
-    VK_ACCESS_2_TRANSFER_READ_BIT_KHR,
-    VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_ASPECT_COLOR_BIT
-};
-
-
-TransitionUseCase BufferPrepareForRead = {
-    VK_PIPELINE_STAGE_2_HOST_BIT,
-    VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR,
-    VK_ACCESS_2_HOST_WRITE_BIT,
-    VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR,
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_ASPECT_NONE,
-};
-
-struct ImageResource
-{
-    VkImageCreateInfo _image_info;
-    VmaAllocationCreateInfo _alloc_create_info;
-    VkImage _image;
-    VmaAllocation _allocation;
-    VkImageView _view;
-    VkVideoPictureResourceInfoKHR _picture_resource_info;
-
-    VkImageMemoryBarrier2 Barrier(TransitionUseCase trans)
-    {
-        VkImageMemoryBarrier2 r = {};
-        r.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        r.pNext = nullptr;
-        r.srcStageMask = trans.src_stage;
-        r.srcAccessMask = trans.src_access;
-        r.dstStageMask = trans.dst_stage;
-        r.dstAccessMask = trans.dst_access;
-        r.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
-        r.image = _image;
-        r.oldLayout = trans.old_layout;
-        r.newLayout = trans.new_layout;
-        r.subresourceRange.aspectMask = trans.aspect_mask;
-        r.subresourceRange.baseMipLevel = 0;
-        r.subresourceRange.levelCount = 1;
-        r.subresourceRange.baseArrayLayer = 0;
-        r.subresourceRange.layerCount = 1;
-        return r;
-    }
-
-    void CopyToBuffer(vvb::SysVulkan* sys_vk, VkCommandBuffer cmd_buf, u32 width_samples,
-        u32 buf_pitch, u32 buf_height, VkImageAspectFlags aspect_mask, VkBuffer buffer)
-    {
-        auto& vk = sys_vk->_vfn;
-        VkBufferImageCopy luma_copy_region = {};
-        luma_copy_region.bufferOffset = 0;
-        luma_copy_region.bufferRowLength = buf_pitch;
-        luma_copy_region.bufferImageHeight = buf_height;
-        luma_copy_region.imageSubresource.aspectMask = aspect_mask;
-        luma_copy_region.imageSubresource.mipLevel = 0;
-        luma_copy_region.imageSubresource.baseArrayLayer = 0;
-        luma_copy_region.imageSubresource.layerCount = 1;
-        luma_copy_region.imageOffset = { 0, 0, 0 };
-        luma_copy_region.imageExtent = { width_samples, buf_height, 1 };
-        vk.CmdCopyImageToBuffer(cmd_buf, _image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            buffer, 1, &luma_copy_region);
-    }
-};
-ImageResource CreateImageResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 height,
-    VkImageUsageFlags usage, VkComponentMapping view_component_map, VkVideoProfileListInfoKHR* profile_list = nullptr)
-{
-    ImageResource r = {};
-
-    r._image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    r._image_info.pNext = profile_list;
-    r._image_info.flags = 0;
-    r._image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    r._image_info.imageType = VK_IMAGE_TYPE_2D;
-    r._image_info.format = format;
-    r._image_info.extent = VkExtent3D{width, height, 1};
-    r._image_info.mipLevels = 1;
-    r._image_info.arrayLayers = 1;
-    r._image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    r._image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    r._image_info.usage = usage;
-    r._image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-    u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
-    r._image_info.queueFamilyIndexCount = 2;
-    r._image_info.pQueueFamilyIndices = queue_family_indices;
-    r._alloc_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    r._alloc_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    VK_CHECK(vmaCreateImage(sys_vk->_allocator,
-        &r._image_info,
-        &r._alloc_create_info,
-        &r._image,
-        &r._allocation,
-        nullptr));
-    VkImageViewUsageCreateInfo out_image_view_usage_info = {};
-    out_image_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-    out_image_view_usage_info.usage = usage;
-    VkImageViewCreateInfo out_image_view_info = {};
-    out_image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    out_image_view_info.pNext = &out_image_view_usage_info;
-    out_image_view_info.flags = 0;
-    out_image_view_info.image = r._image;
-    out_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
-    out_image_view_info.format = format;
-    out_image_view_info.components = view_component_map;
-    out_image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    out_image_view_info.subresourceRange.baseMipLevel = 0;
-    out_image_view_info.subresourceRange.levelCount = 1;
-    out_image_view_info.subresourceRange.baseArrayLayer = 0;
-    out_image_view_info.subresourceRange.layerCount = 1;
-    auto& vk = sys_vk->_vfn;
-    VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &out_image_view_info, nullptr, &r._view));
-    r._picture_resource_info.sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
-    r._picture_resource_info.pNext = nullptr;
-    r._picture_resource_info.codedOffset = VkOffset2D{0, 0};
-    r._picture_resource_info.codedExtent = VkExtent2D{width, height};
-    r._picture_resource_info.baseArrayLayer = 0;
-    r._picture_resource_info.imageViewBinding = r._view;
-    return r;
-}
-
-void DestroyImageResource(vvb::SysVulkan* sys_vk, ImageResource* r)
-{
-    auto& vk = sys_vk->_vfn;
-    vk.DestroyImageView(sys_vk->_active_dev, r->_view, nullptr);
-    vmaDestroyImage(sys_vk->_allocator, r->_image, r->_allocation);
-}
 
 struct Dpb
 {
-    VkImageCreateInfo _image_info;
-    VmaAllocationCreateInfo _alloc_create_info;
-    VkImage _image;
-    VmaAllocation _allocation;
+    VkImageCreateInfo _dpb_image_info;
+    VmaAllocationCreateInfo _dpb_alloc_create_info;
+    VmaAllocation _dpb_allocation;
+    VkImage _dpb_images;
+    VkImageView _dpb_slot_views[16]; // check min / max caps
+    VkVideoPictureResourceInfoKHR _dpb_slot_picture_resource_infos[16];
 
-    VkImageView _slot_views[16]; // check min / max caps
-    VkVideoPictureResourceInfoKHR _slot_picture_resource_infos[16];
+    VkImageCreateInfo _dst_image_info;
+    VmaAllocationCreateInfo _dst_alloc_create_info;
+    VmaAllocation _dst_allocation;
+    VkImage _dst_images; // One used for non-coincident cases (AMD only currently)
+    VkImageView _dst_slot_views[16]; // check min / max caps
+    VkVideoPictureResourceInfoKHR _dst_slot_picture_resource_infos[16];
 
-    VkImageMemoryBarrier2 Barrier(TransitionUseCase trans, u32 slot_idx)
+    bool _coincident_image_resources = true;
+
+    std::vector<VkImageMemoryBarrier2> SlotBarriers(TransitionType trans_type, u32 slot_idx)
     {
-        VkImageMemoryBarrier2 r = {};
-        r.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        r.pNext = nullptr;
-        r.srcStageMask = trans.src_stage;
-        r.srcAccessMask = trans.src_access;
-        r.dstStageMask = trans.dst_stage;
-        r.dstAccessMask = trans.dst_access;
-        r.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
-        r.image = _image;
-        r.oldLayout = trans.old_layout;
-        r.newLayout = trans.new_layout;
-        r.subresourceRange.aspectMask = trans.aspect_mask;
-        r.subresourceRange.baseMipLevel = 0;
-        r.subresourceRange.levelCount = 1;
-        r.subresourceRange.baseArrayLayer = slot_idx;
-        r.subresourceRange.layerCount = 1;
+        std::vector<VkImageMemoryBarrier2> r;
+        VkImageMemoryBarrier2 dpb_barrier = {};
+        VkImageMemoryBarrier2 dst_barrier = {};
+        dpb_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        dpb_barrier.pNext = nullptr;
+        dpb_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        dpb_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
+        dpb_barrier.image = _dpb_images;
+        dpb_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        dpb_barrier.subresourceRange.baseMipLevel = 0;
+        dpb_barrier.subresourceRange.levelCount = 1;
+        dpb_barrier.subresourceRange.baseArrayLayer = slot_idx;
+        dpb_barrier.subresourceRange.layerCount = 1;
+        switch(trans_type)
+        {
+            case TRANSITION_IMAGE_INITIALIZE:
+                dpb_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE_KHR;
+                dpb_barrier.srcAccessMask = VK_ACCESS_2_NONE_KHR;
+                dpb_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+                dpb_barrier.dstAccessMask = VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
+                dpb_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                dpb_barrier.newLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+                dst_barrier = dpb_barrier;
+                dst_barrier.image = _dst_images;
+                dst_barrier.newLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
+                r.push_back(dpb_barrier);
+                if (!_coincident_image_resources)
+                    r.push_back(dst_barrier);
+                return r;
+            case TRANSITION_IMAGE_TRANSFER_TO_HOST:
+                dpb_barrier.srcStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+                dpb_barrier.srcAccessMask = VK_ACCESS_2_NONE_KHR;
+                dpb_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR;
+                dpb_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT_KHR;
+                dpb_barrier.oldLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+                dpb_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                dst_barrier = dpb_barrier;
+                dst_barrier.image = _dst_images;
+                dst_barrier.oldLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
+                if (!_coincident_image_resources)
+                    r.push_back(dst_barrier);
+                else
+                    r.push_back(dpb_barrier);
+                return r;
+                break;
+        }
+
         return r;
+    }
+
+    void CopySlotToBuffer(vvb::SysVulkan* sys_vk, VkCommandBuffer cmd_buf, u32 slot_idx, u32 width_samples,
+        u32 buf_pitch, u32 buf_height, VkImageAspectFlags aspect_mask, VkBuffer buffer)
+    {
+        auto& vk = sys_vk->_vfn;
+        VkBufferImageCopy copy_region = {};
+        copy_region.bufferOffset = 0;
+        copy_region.bufferRowLength = buf_pitch;
+        copy_region.bufferImageHeight = buf_height;
+        copy_region.imageSubresource.aspectMask = aspect_mask;
+        copy_region.imageSubresource.mipLevel = 0;
+        copy_region.imageSubresource.baseArrayLayer = slot_idx;
+        copy_region.imageSubresource.layerCount = 1;
+        copy_region.imageOffset = { 0, 0, 0 };
+        copy_region.imageExtent = { width_samples, buf_height, 1 };
+        VkImage dst_image = _coincident_image_resources ? _dpb_images : _dst_images;
+        vk.CmdCopyImageToBuffer(cmd_buf, dst_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            buffer, 1, &copy_region);
+    }
+
+    VkVideoPictureResourceInfoKHR SlotDstPictureResource(u32 slot_idx)
+    {
+        if (_coincident_image_resources)
+        {
+            return _dpb_slot_picture_resource_infos[slot_idx];
+        }
+        else
+        {
+            return _dst_slot_picture_resource_infos[slot_idx];
+        }
     }
 };
 
-Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 height, u32 num_slots,
-    VkImageUsageFlags usage, VkComponentMapping view_component_map, VkVideoProfileListInfoKHR* profile_list = nullptr)
+Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, u32 width, u32 height, u32 num_slots,
+    bool coincident_image_resources,
+    VkImageUsageFlags dpb_usage, VkFormat dpb_format, VkComponentMapping dpb_view_component_map,
+    VkImageUsageFlags dst_usage, VkFormat dst_format, VkComponentMapping dst_view_component_map,
+    VkVideoProfileListInfoKHR* profile_list = nullptr)
 {
     auto& vk = sys_vk->_vfn;
     Dpb r = {};
@@ -1637,56 +1543,86 @@ Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 he
     static_assert(sizeof(r) < 4000, "Dpb is too big");
     ASSERT(num_slots < 16);
 
-    r._image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    r._image_info.pNext = profile_list;
-    r._image_info.flags = 0;
-    r._image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    r._image_info.imageType = VK_IMAGE_TYPE_2D;
-    r._image_info.format = format;
-    r._image_info.extent = VkExtent3D{width, height, 1};
-    r._image_info.mipLevels = 1;
-    r._image_info.arrayLayers = num_slots;
-    r._image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    r._image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    r._image_info.usage = usage;
-    r._image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    r._coincident_image_resources = coincident_image_resources;
+
+    r._dpb_image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    r._dpb_image_info.pNext = profile_list;
+    r._dpb_image_info.flags = 0;
+    r._dpb_image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    r._dpb_image_info.imageType = VK_IMAGE_TYPE_2D;
+    r._dpb_image_info.format = dpb_format;
+    r._dpb_image_info.extent = VkExtent3D{width, height, 1};
+    r._dpb_image_info.mipLevels = 1;
+    r._dpb_image_info.arrayLayers = num_slots;
+    r._dpb_image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    r._dpb_image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    r._dpb_image_info.usage = dpb_usage;
+    r._dpb_image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
     u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
-    r._image_info.queueFamilyIndexCount = 2;
-    r._image_info.pQueueFamilyIndices = queue_family_indices;
-    r._alloc_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    r._alloc_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    r._dpb_image_info.queueFamilyIndexCount = 2;
+    r._dpb_image_info.pQueueFamilyIndices = queue_family_indices;
+    r._dpb_alloc_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    r._dpb_alloc_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     VK_CHECK(vmaCreateImage(sys_vk->_allocator,
-        &r._image_info,
-        &r._alloc_create_info,
-        &r._image,
-        &r._allocation,
+        &r._dpb_image_info,
+        &r._dpb_alloc_create_info,
+        &r._dpb_images,
+        &r._dpb_allocation,
         nullptr));
+    
+    // Now reuse the above to create the dst images. This are required for non-coincident implementations like AMD
+    // A little heavy handed to always allocate them, but makes life simpler.
+    r._dst_image_info = r._dpb_image_info;
+    r._dst_image_info.format = dst_format;
+    r._dst_image_info.usage = dst_usage;
+    VK_CHECK(vmaCreateImage(sys_vk->_allocator,
+        &r._dst_image_info,
+        &r._dst_alloc_create_info,
+        &r._dst_images,
+        &r._dst_allocation,
+        nullptr));
+
     for (u32 slot_idx = 0; slot_idx < num_slots; slot_idx++)
     {
-        VkImageViewUsageCreateInfo view_usage_info = {};
-        view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-        view_usage_info.usage = usage;
+        VkImageViewUsageCreateInfo dpb_view_usage_info = {};
+        dpb_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        dpb_view_usage_info.usage = dpb_usage;
+        VkImageViewUsageCreateInfo dst_view_usage_info = {};
+        dst_view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        dst_view_usage_info.usage = dst_usage;
         VkImageViewCreateInfo image_view_info = {};
         image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        image_view_info.pNext = &view_usage_info;
+        image_view_info.pNext = &dpb_view_usage_info;
         image_view_info.flags = 0;
-        image_view_info.image = r._image;
+        image_view_info.image = r._dpb_images;
         image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
-        image_view_info.format = format;
-        image_view_info.components = view_component_map;
+        image_view_info.format = dpb_format;
+        image_view_info.components = dpb_view_component_map;
         image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         image_view_info.subresourceRange.baseMipLevel = 0;
         image_view_info.subresourceRange.levelCount = 1;
         image_view_info.subresourceRange.baseArrayLayer = slot_idx;
         image_view_info.subresourceRange.layerCount = 1;
-    
-        VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._slot_views[slot_idx]));
-        r._slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
-        r._slot_picture_resource_infos[slot_idx].pNext = nullptr;
-        r._slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
-        r._slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
-        r._slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
-        r._slot_picture_resource_infos[slot_idx].imageViewBinding = r._slot_views[slot_idx];
+        VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._dpb_slot_views[slot_idx]));
+        image_view_info.pNext = &dst_view_usage_info;
+        image_view_info.image = r._dst_images;
+        image_view_info.format = dst_format;
+        image_view_info.components = dst_view_component_map;
+        VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._dst_slot_views[slot_idx]));
+
+        r._dpb_slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+        r._dpb_slot_picture_resource_infos[slot_idx].pNext = nullptr;
+        r._dpb_slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
+        r._dpb_slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
+        r._dpb_slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
+        r._dpb_slot_picture_resource_infos[slot_idx].imageViewBinding = r._dpb_slot_views[slot_idx];
+
+        r._dst_slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+        r._dst_slot_picture_resource_infos[slot_idx].pNext = nullptr;
+        r._dst_slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
+        r._dst_slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
+        r._dst_slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
+        r._dst_slot_picture_resource_infos[slot_idx].imageViewBinding = r._dst_slot_views[slot_idx];
     }
 
     return r;
@@ -1694,11 +1630,13 @@ Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 he
 void DestroyDpbResource(vvb::SysVulkan* sys_vk, Dpb* r)
 {
     auto& vk = sys_vk->_vfn;
-    for (u32 slot_idx = 0; slot_idx < r->_image_info.arrayLayers; slot_idx++)
+    for (u32 slot_idx = 0; slot_idx < r->_dpb_image_info.arrayLayers; slot_idx++)
     {
-        vk.DestroyImageView(sys_vk->_active_dev, r->_slot_views[slot_idx], nullptr);
+        vk.DestroyImageView(sys_vk->_active_dev, r->_dpb_slot_views[slot_idx], nullptr);
+        vk.DestroyImageView(sys_vk->_active_dev, r->_dst_slot_views[slot_idx], nullptr);
     }
-    vmaDestroyImage(sys_vk->_allocator, r->_image, r->_allocation);
+    vmaDestroyImage(sys_vk->_allocator, r->_dpb_images, r->_dpb_allocation);
+    vmaDestroyImage(sys_vk->_allocator, r->_dst_images, r->_dst_allocation);
 }
 
 struct BufferResource
@@ -1708,21 +1646,27 @@ struct BufferResource
     VkBufferCreateInfo _create_info;
     VmaAllocationCreateInfo _alloc_info;
 
-    VkBufferMemoryBarrier2 Barrier(TransitionUseCase trans)
+    VkBufferMemoryBarrier2 Barrier(TransitionType trans_type)
     {
         VkBufferMemoryBarrier2 r = {};
-        r.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        r.pNext = nullptr;
-        r.srcStageMask = trans.src_stage;
-        r.srcAccessMask = trans.src_access;
-        r.dstStageMask = trans.dst_stage;
-        r.dstAccessMask = trans.dst_access;
-        r.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.buffer = _buffer;
-        r.offset = 0;
-        r.size = _create_info.size;
-        return r;
+        switch (trans_type)
+        {
+        case TRANSITION_BUFFER_FOR_READING:
+            r.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            r.pNext = nullptr;
+            r.srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            r.srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+            r.dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+            r.dstAccessMask = VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR;
+            r.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            r.buffer = _buffer;
+            r.offset = 0;
+            r.size = _create_info.size;
+            return r;
+        default:
+            ASSERT(false);
+        }
     }
 };
 BufferResource CreateBufferResource(vvb::SysVulkan* sys_vk, VkDeviceSize size,
