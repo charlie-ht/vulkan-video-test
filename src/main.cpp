@@ -324,7 +324,7 @@ int main(int argc, char** argv)
     dpb_slot_info.pStdReferenceInfo = &ref_info;
     reference_slot.pNext = &dpb_slot_info;
     reference_slot.slotIndex = 0;
-    decode_info.pSetupReferenceSlot = &reference_slot;
+    decode_info.pSetupReferenceSlot = nullptr; // &reference_slot;
     decode_info.referenceSlotCount = 0;
     decode_info.pReferenceSlots = nullptr;
     if (dpb_and_dst_coincide && decode_info.pSetupReferenceSlot == nullptr)
