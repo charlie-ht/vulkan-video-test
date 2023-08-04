@@ -94,8 +94,8 @@ int main(int argc, char** argv)
     VK_CHECK(vk.GetPhysicalDeviceVideoCapabilitiesKHR(sys_vk->SelectedPhysicalDevice(),
         &avc_profile._profile_info, &video_caps));
 
-    // !(video_caps.flags & VK_VIDEO_CAPABILITY_SEPARATE_REFERENCE_IMAGES_BIT_KHR) -> image arrays for dpb, not implemeted / tested
-    ASSERT(video_caps.flags & VK_VIDEO_CAPABILITY_SEPARATE_REFERENCE_IMAGES_BIT_KHR);
+    // !(video_caps.flags & VK_VIDEO_CAPABILITY_SEPARATE_REFERENCE_IMAGES_BIT_KHR) -> image arrays for dpb
+    // This test uses an image array for the DPB in any case, since it's simpler, but potentially less efficient.
 
     printf("Buffer size alignment: %lu\n", video_caps.minBitstreamBufferSizeAlignment);
     printf("Buffer offset alignment: %lu %lu\n", video_caps.minBitstreamBufferOffsetAlignment, util::AlignUp((VkDeviceSize)0, video_caps.minBitstreamBufferOffsetAlignment));
@@ -126,7 +126,6 @@ int main(int argc, char** argv)
     };
     VkImageUsageFlags dpb_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
     VkImageUsageFlags out_usage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    //out_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR|VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
     if (dpb_and_dst_coincide)
     {
         dpb_usage = out_usage | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
@@ -171,9 +170,6 @@ int main(int argc, char** argv)
     VkBufferMemoryBarrier2 bitstream_barrier = bitstream.Barrier(vvb::BufferPrepareForRead);
 
     // allocate picture buffers
-    // dpb picture
-    vvb::ImageResource dpb_image_resource = vvb::CreateImageResource(sys_vk, selected_dpb_format.format, 176, 144, dpb_usage,
-        selected_out_format.componentMapping, &avc_session_profile_list);
     
     // output picture (not neccesary for coincident case)
     vvb::ImageResource dst_image_resource = {};
@@ -182,6 +178,9 @@ int main(int argc, char** argv)
         dst_image_resource = vvb::CreateImageResource(sys_vk, selected_out_format.format, 176, 144, out_usage,
             selected_out_format.componentMapping, &avc_session_profile_list);
     }
+
+    auto dpb = vvb::CreateDpbResource(sys_vk, selected_dpb_format.format, 176, 144, 8, dpb_usage, selected_dpb_format.componentMapping,
+        &avc_session_profile_list);
 
     // perform decode algorithm for each AU (**)iop
     // for each frame, submit decode command
@@ -236,7 +235,7 @@ int main(int argc, char** argv)
         vk.CmdResetQueryPool(decode_cmd_buf, sys_vk->_query_pool, 0, 1);
     }
 
-    auto out_image_resource = dpb_and_dst_coincide ? dpb_image_resource : dst_image_resource;
+    //auto out_image_resource = dpb_and_dst_coincide ? dpb._slot_picture_resource_infos[0] : dst_image_resource;
 
     //;;;;;;;;;;; Video coding scope begin
     VkVideoBeginCodingInfoKHR begin_coding_info = {};
@@ -249,7 +248,7 @@ int main(int argc, char** argv)
     reference_slot.sType = VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR;
     reference_slot.pNext = nullptr;
     reference_slot.slotIndex = -1;
-    reference_slot.pPictureResource = &dpb_image_resource._picture_resource_info;
+    reference_slot.pPictureResource = &dpb._slot_picture_resource_infos[0];
     begin_coding_info.referenceSlotCount = 1;
     begin_coding_info.pReferenceSlots = &reference_slot;
     vk.CmdBeginVideoCodingKHR(decode_cmd_buf, &begin_coding_info);
@@ -269,7 +268,7 @@ int main(int argc, char** argv)
     out_dep_info.bufferMemoryBarrierCount = 1;
     out_dep_info.pBufferMemoryBarriers = &bitstream_barrier;
     std::vector<VkImageMemoryBarrier2> image_barriers;
-    image_barriers.push_back(dpb_image_resource.Barrier(vvb::DpbImageInitialize));
+    image_barriers.push_back(dpb.Barrier(vvb::DpbImageInitialize, 0u));
     if (!dpb_and_dst_coincide)
     {
         image_barriers.push_back(dst_image_resource.Barrier(vvb::DstImageInitialize));
@@ -313,10 +312,10 @@ int main(int argc, char** argv)
     decode_info.srcBufferRange = bitstream._create_info.size;
     decode_info.dstPictureResource.sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
     decode_info.dstPictureResource.pNext = nullptr;
-    decode_info.dstPictureResource.codedExtent =  VkExtent2D{ out_image_resource._image_info.extent.width, out_image_resource._image_info.extent.height };
+    decode_info.dstPictureResource.codedExtent =  VkExtent2D{ dst_image_resource._image_info.extent.width, dst_image_resource._image_info.extent.height };
     decode_info.dstPictureResource.codedOffset = VkOffset2D{ 0, 0 };
     decode_info.dstPictureResource.baseArrayLayer = 0;
-    decode_info.dstPictureResource.imageViewBinding = out_image_resource._view;
+    decode_info.dstPictureResource.imageViewBinding = dst_image_resource._view;
     VkVideoDecodeH264DpbSlotInfoKHR dpb_slot_info = {};
     dpb_slot_info.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_DPB_SLOT_INFO_KHR;
     dpb_slot_info.pNext = nullptr;
@@ -398,8 +397,8 @@ int main(int argc, char** argv)
 
     vk.BeginCommandBuffer(tx_cmd_buf, &cmd_buf_begin_info);
         VkImageMemoryBarrier2 out_image_barrier = dpb_and_dst_coincide ? 
-            out_image_resource.Barrier(vvb::DpbImageBeginTransferToHost) :
-            out_image_resource.Barrier(vvb::DstImageBeginTransferToHost);
+            dpb.Barrier(vvb::DpbImageBeginTransferToHost, 0u) :
+            dst_image_resource.Barrier(vvb::DstImageBeginTransferToHost);
 
         out_dep_info = {};
         out_dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
@@ -416,13 +415,13 @@ int main(int argc, char** argv)
         u32 luma_width_samples = 176;
         u32 luma_buf_pitch = 192;
         u32 luma_buf_height = 144;
-        out_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, luma_width_samples, luma_buf_pitch, luma_buf_height,
+        dst_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, luma_width_samples, luma_buf_pitch, luma_buf_height,
             VK_IMAGE_ASPECT_PLANE_0_BIT, luma_buf._buffer);
         
         u32 chroma_width_samples = luma_width_samples / 2;
         u32 chroma_buf_pitch = luma_buf_pitch / 2;
         u32 chroma_buf_height = luma_buf_height / 2;
-        out_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, chroma_width_samples, chroma_buf_pitch, chroma_buf_height,
+        dst_image_resource.CopyToBuffer(sys_vk, tx_cmd_buf, chroma_width_samples, chroma_buf_pitch, chroma_buf_height,
             VK_IMAGE_ASPECT_PLANE_1_BIT, chroma_buf._buffer);
     vk.EndCommandBuffer(tx_cmd_buf);
 
@@ -464,7 +463,7 @@ int main(int argc, char** argv)
     fclose(out_file);
 
     vk.DestroyFence(sys_vk->_active_dev, fence, nullptr);
-    vvb::DestroyImageResource(sys_vk, &dpb_image_resource);
+    //vvb::DestroyImageResource(sys_vk, &dpb_image_resource);
     if (!dpb_and_dst_coincide)
         vvb::DestroyImageResource(sys_vk, &dst_image_resource);
 
@@ -478,6 +477,8 @@ int main(int argc, char** argv)
     }
     vk.DestroyCommandPool(sys_vk->_active_dev, tx_cmd_pool, nullptr);
     vk.DestroyCommandPool(sys_vk->_active_dev, decode_cmd_pool, nullptr);
+
+    vvb::DestroyDpbResource(sys_vk, &dpb);
 
     vvb::DestroyVideoSession(sys_vk, &coding_session);
     if (false)

@@ -1587,10 +1587,117 @@ ImageResource CreateImageResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 w
     r._picture_resource_info.imageViewBinding = r._view;
     return r;
 }
+
 void DestroyImageResource(vvb::SysVulkan* sys_vk, ImageResource* r)
 {
     auto& vk = sys_vk->_vfn;
     vk.DestroyImageView(sys_vk->_active_dev, r->_view, nullptr);
+    vmaDestroyImage(sys_vk->_allocator, r->_image, r->_allocation);
+}
+
+struct Dpb
+{
+    VkImageCreateInfo _image_info;
+    VmaAllocationCreateInfo _alloc_create_info;
+    VkImage _image;
+    VmaAllocation _allocation;
+
+    VkImageView _slot_views[16]; // check min / max caps
+    VkVideoPictureResourceInfoKHR _slot_picture_resource_infos[16];
+
+    VkImageMemoryBarrier2 Barrier(TransitionUseCase trans, u32 slot_idx)
+    {
+        VkImageMemoryBarrier2 r = {};
+        r.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        r.pNext = nullptr;
+        r.srcStageMask = trans.src_stage;
+        r.srcAccessMask = trans.src_access;
+        r.dstStageMask = trans.dst_stage;
+        r.dstAccessMask = trans.dst_access;
+        r.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // concurrent usage is enabled
+        r.image = _image;
+        r.oldLayout = trans.old_layout;
+        r.newLayout = trans.new_layout;
+        r.subresourceRange.aspectMask = trans.aspect_mask;
+        r.subresourceRange.baseMipLevel = 0;
+        r.subresourceRange.levelCount = 1;
+        r.subresourceRange.baseArrayLayer = slot_idx;
+        r.subresourceRange.layerCount = 1;
+        return r;
+    }
+};
+
+Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, VkFormat format, u32 width, u32 height, u32 num_slots,
+    VkImageUsageFlags usage, VkComponentMapping view_component_map, VkVideoProfileListInfoKHR* profile_list = nullptr)
+{
+    auto& vk = sys_vk->_vfn;
+    Dpb r = {};
+    printf("Dpb is %lu bytes\n", sizeof(r));
+    static_assert(sizeof(r) < 4000, "Dpb is too big");
+    ASSERT(num_slots < 16);
+
+    r._image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    r._image_info.pNext = profile_list;
+    r._image_info.flags = 0;
+    r._image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    r._image_info.imageType = VK_IMAGE_TYPE_2D;
+    r._image_info.format = format;
+    r._image_info.extent = VkExtent3D{width, height, 1};
+    r._image_info.mipLevels = 1;
+    r._image_info.arrayLayers = num_slots;
+    r._image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    r._image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    r._image_info.usage = usage;
+    r._image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    u32 queue_family_indices[2] = {(u32)sys_vk->queue_family_decode_index, (u32)sys_vk->queue_family_tx_index};
+    r._image_info.queueFamilyIndexCount = 2;
+    r._image_info.pQueueFamilyIndices = queue_family_indices;
+    r._alloc_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    r._alloc_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VK_CHECK(vmaCreateImage(sys_vk->_allocator,
+        &r._image_info,
+        &r._alloc_create_info,
+        &r._image,
+        &r._allocation,
+        nullptr));
+    for (u32 slot_idx = 0; slot_idx < num_slots; slot_idx++)
+    {
+        VkImageViewUsageCreateInfo view_usage_info = {};
+        view_usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        view_usage_info.usage = usage;
+        VkImageViewCreateInfo image_view_info = {};
+        image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        image_view_info.pNext = &view_usage_info;
+        image_view_info.flags = 0;
+        image_view_info.image = r._image;
+        image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // todo: 2d arrays are also supported but not tested
+        image_view_info.format = format;
+        image_view_info.components = view_component_map;
+        image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_view_info.subresourceRange.baseMipLevel = 0;
+        image_view_info.subresourceRange.levelCount = 1;
+        image_view_info.subresourceRange.baseArrayLayer = slot_idx;
+        image_view_info.subresourceRange.layerCount = 1;
+    
+        VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._slot_views[slot_idx]));
+        r._slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+        r._slot_picture_resource_infos[slot_idx].pNext = nullptr;
+        r._slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
+        r._slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
+        r._slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
+        r._slot_picture_resource_infos[slot_idx].imageViewBinding = r._slot_views[slot_idx];
+    }
+
+    return r;
+}
+void DestroyDpbResource(vvb::SysVulkan* sys_vk, Dpb* r)
+{
+    auto& vk = sys_vk->_vfn;
+    for (u32 slot_idx = 0; slot_idx < r->_image_info.arrayLayers; slot_idx++)
+    {
+        vk.DestroyImageView(sys_vk->_active_dev, r->_slot_views[slot_idx], nullptr);
+    }
     vmaDestroyImage(sys_vk->_allocator, r->_image, r->_allocation);
 }
 

@@ -66,6 +66,7 @@
                 //     "value": "${env:HOME}/cts/root/share/vulkan/icd.d/radeon_icd.x86_64.json"
                 // },
                 "RADV_PERFTEST": "video_decode",
+                "RADV_DEBUG": "videoarraypath",
                 // {
                 //     "name": "VK_INSTANCE_LAYERS",
                 //     "value": ":VK_LAYER_LUNARG_gfxreconstruct",
