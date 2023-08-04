@@ -55,13 +55,11 @@ extern int debuglevel;
 #define PDEBUG(level, ...) (level <= debuglevel ? fprintf(stderr, __VA_ARGS__), fflush(stderr) : 0)
 
 // if errno != 0, report the errno and fprintf the ... varargs on stderr.
-#define ERROR(errno, ...) ((errno == 0 ? (void)nullptr : perror("syscall failed")), \
-    fprintf(stderr, "%s", util::TimestampStr()),                                   \
+#define ERROR(errno, ...) (fprintf(stderr, "%s", util::TimestampStr()),                                   \
     fprintf(stderr, __VA_ARGS__),                                                   \
     fflush(stderr))
 // same as ERROR, but also breaks into the debugger
-#define XERROR(errno, ...) ((errno == 0 ? (void)nullptr : perror("syscall failed")), \
-    fprintf(stderr, "%s", util::TimestampStr()),                                    \
+#define XERROR(errno, ...)  (fprintf(stderr, "%s", util::TimestampStr()),                                    \
     fprintf(stderr, __VA_ARGS__),                                                    \
     fflush(stderr),                                                                  \
     abort(), \
@@ -259,6 +257,12 @@ public:
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         return (now.tv_sec - start.tv_sec) * 1000000000 + (now.tv_nsec - start.tv_nsec);
+    }
+
+    u64 ElapsedMicroseconds()
+    {
+        u64 ns = ElapsedNanoseconds();
+        return ns / 1000;
     }
 
     u64 ElapsedMilliseconds()

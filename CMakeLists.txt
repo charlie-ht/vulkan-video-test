@@ -9,21 +9,19 @@ set(VVP_SOURCES
     src/vk_memory_allocator.cpp
 )
 
-set(VVP_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
-list(APPEND VVP_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include)
-list(APPEND VVP_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include/vulkan)
-list(APPEND VVP_INCLUDE_DIRS $ENV{HOME}/cts/root/include)
-list(APPEND VVP_INCLUDE_DIRS third_party/VulkanMemoryAllocator/include)
+set(THIRD_PARTY_DIR ${PROJECT_SOURCE_DIR}/third_party)
 
+set(VVP_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
+list(APPEND VVP_INCLUDE_DIRS ${THIRD_PARTY_DIR}/Vulkan-Headers/include)
+list(APPEND VVP_INCLUDE_DIRS ${THIRD_PARTY_DIR}/Vulkan-Headers/include/vulkan)
+list(APPEND VVP_INCLUDE_DIRS ${THIRD_PARTY_DIR}/VulkanMemoryAllocator/include)
+# list(APPEND VVP_INCLUDE_DIRS $ENV{HOME}/cts/root/include)
+
+# Leaving here for future WSI integration
 # add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
 # find_package(SDL2 REQUIRED)
 # list(APPEND VVP_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
 # list(APPEND VVP_LIBRARIES SDL2::SDL2)
-
-
-# set(VOLK_DIR "${CMAKE_SOURCE_DIR}/third_party/volk")
-# set(VOLK_SOURCES "${VOLK_DIR}/volk.c" "${VOLK_DIR}/volk.h")
-
 # set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")
 # set(IMGUI_SOURCES
 #         ${IMGUI_DIR}/imgui.cpp
@@ -41,11 +39,9 @@ list(APPEND VVP_INCLUDE_DIRS third_party/VulkanMemoryAllocator/include)
 #         ${IMGUI_DIR}/backends/imgui_impl_vulkan.h
 # )
 #add_executable(vvp ${VVP_SOURCES} ${IMGUI_SOURCES})
-
-add_executable(vvp ${VVP_SOURCES} ${IMGUI_SOURCES})
-target_compile_definitions(vvp PRIVATE VK_USE_PLATFORM_XCB_KHR)
+#target_compile_definitions(vvp PRIVATE VK_USE_PLATFORM_XCB_KHR)
 #target_include_directories(vvp SYSTEM PUBLIC ${VVP_INCLUDE_DIRS} ${SDL2_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/third_party ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 
-target_include_directories(vvp SYSTEM PUBLIC ${VVP_INCLUDE_DIRS} ${SDL2_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/third_party ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-
+add_executable(vvp ${VVP_SOURCES})
+target_include_directories(vvp SYSTEM PUBLIC ${VVP_INCLUDE_DIRS})
 target_link_libraries(vvp PRIVATE ${VVP_LIBRARIES})

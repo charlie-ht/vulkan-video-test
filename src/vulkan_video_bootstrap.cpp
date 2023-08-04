@@ -489,15 +489,15 @@ public:
     
     std::vector<const char*> _active_dev_enabled_exts;
 
-    bool _enable_validation { true };
-    u32 _debug_level { 1 };
-
     struct UserOptions {
         bool detect_env { false };
         bool enable_validation { true };
         const char* requested_device_name { nullptr };
         int requested_device_major { -1 };
         int requested_device_minor { -1 };
+        int requested_driver_version_major { -1 };
+        int requested_driver_version_minor { -1 };
+        int requested_driver_version_patch { -1 };
     } _options;
 
     SysVulkan(const UserOptions& options)
@@ -619,7 +619,7 @@ static void check_instance_extensions(SysVulkan& sys_vk, std::vector<const char*
 
     std::vector<VkExtensionProperties> properties;
     get_vector(properties, vk.EnumerateInstanceExtensionProperties, default_layer);
-    if (sys_vk._debug_level > 0) {
+    if (sys_vk._options.enable_validation) {
         fprintf(stderr, "extensions provided by layer %s:\n", default_layer);
         for (const auto& prop : properties) {
             if (!strcmp(prop.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
@@ -649,7 +649,7 @@ static void check_validation_layers(SysVulkan& sys_vk, std::vector<const char*>&
 
     enabled_layers.clear();
 
-    if (sys_vk._enable_validation) {
+    if (sys_vk._options.enable_validation) {
         bool found_default = false;
 
         for (const auto& layerProperties : layers) {
@@ -705,7 +705,7 @@ void load_instance(SysVulkan& sys_vk)
         VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
     };
 
-    if (sys_vk._enable_validation) {
+    if (sys_vk._options.enable_validation) {
         validation_features.pEnabledValidationFeatures = feat_list;
         validation_features.enabledValidationFeatureCount = ARRAY_ELEMS(feat_list);
         inst_props.pNext = &validation_features;
@@ -862,7 +862,10 @@ static void choose_and_load_device(SysVulkan& sys_vk)
         XERROR(1, "No physical device found!");
 
     const auto num_devices = sys_vk._physical_devices.size();
-    printf("There's %ld physical devices\n", num_devices);
+    if (num_devices > 1)
+        printf("%ld physical devices discovered\n", num_devices);
+    else
+        printf("single physical device discovered\n");
     prop.resize(num_devices);
     idp.resize(num_devices);
     drm_prop.resize(num_devices);
@@ -894,6 +897,20 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
     for (u32 i = 0; i < num_devices; i++) {
         auto& opts = sys_vk._options;       
+        if (opts.requested_driver_version_major != -1 && opts.requested_driver_version_minor != -1 && opts.requested_driver_version_patch != -1) {
+            if (VK_API_VERSION_MAJOR(prop[i].properties.driverVersion) == opts.requested_driver_version_major &&
+                VK_API_VERSION_MINOR(prop[i].properties.driverVersion) == opts.requested_driver_version_minor &&
+                VK_API_VERSION_PATCH(prop[i].properties.driverVersion) == opts.requested_driver_version_patch) {
+                choice = i;
+                printf("Device %s picked based on driver version selection\n", prop[i].properties.deviceName);
+                break;
+            }
+            if (drm_prop[i].primaryMajor == opts.requested_device_major && drm_prop[i].primaryMinor == opts.requested_device_minor) {
+                choice = i;
+                printf("Device %s picked based on major/minor number selection\n", prop[i].properties.deviceName);
+                break;
+            }
+        }
         if (opts.requested_device_major != -1 || opts.requested_device_minor != -1) {
             if (drm_prop[i].primaryMajor == opts.requested_device_major && drm_prop[i].primaryMinor == opts.requested_device_minor) {
                 choice = i;
@@ -904,8 +921,6 @@ static void choose_and_load_device(SysVulkan& sys_vk)
 
         const char* this_device_name = prop[i].properties.deviceName;
         if (opts.requested_device_name && util::StrCaseInsensitiveSubstring(this_device_name, opts.requested_device_name)) {
-            if (util::StrEqual(opts.requested_device_name, "amd") && VK_API_VERSION_MAJOR(prop[i].properties.driverVersion) < 23)
-                continue; // HACK to pick up the Mesa Git driver
             choice = i;
             printf("Device %s picked based on device name selection (%s)\n", prop[i].properties.deviceName, opts.requested_device_name);
             break;
@@ -913,8 +928,15 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     }
 
     if (choice == -1)
-        XERROR(1, "Could not find a physical device to use\n");
-
+    {
+        printf("ERROR: No physical device selected\n");
+        printf("Consult the above list of available devices, and then select one using either:\n");
+        printf("    --device-name=<name> (e.g. --device-name=amd) (insensitive substring search) OR\n");
+        printf("    --device-major-minor=<major>.<minor> : select device by major and minor version (hex)\n");
+        printf("    --driver-version=<major>.<minor>.<patch> : select device by available driver version\n");
+        exit(1);
+    }
+ 
     sys_vk._selected_physical_dev_idx = choice;
 
     printf("Selected device %s (driver version: %d)\n", prop[choice].properties.deviceName, VK_API_VERSION_MAJOR(prop[choice].properties.driverVersion));
@@ -948,11 +970,11 @@ static void choose_and_load_device(SysVulkan& sys_vk)
     dev_features.pNext = &dev_features_1_1;
 
     util::Timer t;
-    u64 ms;
+    u64 us;
     t.GetCurrentTime();
     vk.GetPhysicalDeviceFeatures2(sys_vk.SelectedPhysicalDevice(), &dev_features);
-    ms = t.ElapsedMilliseconds();
-    printf("GetPhysicalDeviceFeatures2 took %" PRIu64 " ms\n", ms);
+    us = t.ElapsedMicroseconds();
+    printf("GetPhysicalDeviceFeatures2 took %" PRIu64 " us\n", us);
 
     VkDeviceCreateInfo dev_info = {};
     dev_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1284,20 +1306,20 @@ bool init_vulkan(SysVulkan& sys_vk)
 
     t.GetCurrentTime();
     load_vk_functions(sys_vk);
-    ms = t.ElapsedMilliseconds();
-    printf("load_vk_functions took %" PRIu64 " ms", ms);
+    ms = t.ElapsedMicroseconds();
+    printf("DEBUG: core load_vk_functions took %" PRIu64 " us\n", ms);
     
     t.GetCurrentTime();
     load_instance(sys_vk);
     ms = t.ElapsedMilliseconds();
-    printf("load_instance took %" PRIu64 " ms", ms);
+    printf("DEBUG: load_instance took %" PRIu64 " ms\n", ms);
 
     t.GetCurrentTime();
     load_vk_functions(sys_vk, FF_VK_EXT_NO_FLAG, true, false);
-    ms = t.ElapsedMilliseconds();
-    printf("load_vk_functions took %" PRIu64 " ms", ms);
+    ms = t.ElapsedMicroseconds();
+    printf("DEBUG: full load_vk_functions took %" PRIu64 " us\n", ms);
 
-    if (sys_vk._debug_level > 0) {
+    if (sys_vk._options.enable_validation) {
         VkDebugUtilsMessengerCreateInfoEXT dbg = {};
         dbg.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
         dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
@@ -1426,6 +1448,7 @@ enum TransitionType
 {
     TRANSITION_IMAGE_INITIALIZE,
     TRANSITION_IMAGE_TRANSFER_TO_HOST,
+    TRANSITION_IMAGE_DPB_TO_DST,
     TRANSITION_BUFFER_FOR_READING,
 };
 
@@ -1477,6 +1500,16 @@ struct Dpb
                 r.push_back(dpb_barrier);
                 if (!_coincident_image_resources)
                     r.push_back(dst_barrier);
+                return r;
+            case TRANSITION_IMAGE_DPB_TO_DST:
+                dpb_barrier.srcStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+                dpb_barrier.srcAccessMask = VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
+                dpb_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+                dpb_barrier.dstAccessMask = VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
+                dpb_barrier.oldLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR;
+                dpb_barrier.newLayout = VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
+                r.push_back(dpb_barrier);
+                ASSERT(_coincident_image_resources);
                 return r;
             case TRANSITION_IMAGE_TRANSFER_TO_HOST:
                 dpb_barrier.srcStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
@@ -1604,27 +1637,30 @@ Dpb CreateDpbResource(vvb::SysVulkan* sys_vk, u32 width, u32 height, u32 num_slo
         image_view_info.subresourceRange.baseArrayLayer = slot_idx;
         image_view_info.subresourceRange.layerCount = 1;
         VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._dpb_slot_views[slot_idx]));
-        image_view_info.pNext = &dst_view_usage_info;
-        image_view_info.image = r._dst_images;
-        image_view_info.format = dst_format;
-        image_view_info.components = dst_view_component_map;
-        VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._dst_slot_views[slot_idx]));
-
+        if (!coincident_image_resources)
+        {
+            image_view_info.pNext = &dst_view_usage_info;
+            image_view_info.image = r._dst_images;
+            image_view_info.format = dst_format;
+            image_view_info.components = dst_view_component_map;
+            VK_CHECK(vk.CreateImageView(sys_vk->_active_dev, &image_view_info, nullptr, &r._dst_slot_views[slot_idx]));
+        }
         r._dpb_slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
         r._dpb_slot_picture_resource_infos[slot_idx].pNext = nullptr;
         r._dpb_slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
         r._dpb_slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
         r._dpb_slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
         r._dpb_slot_picture_resource_infos[slot_idx].imageViewBinding = r._dpb_slot_views[slot_idx];
-
-        r._dst_slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
-        r._dst_slot_picture_resource_infos[slot_idx].pNext = nullptr;
-        r._dst_slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
-        r._dst_slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
-        r._dst_slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
-        r._dst_slot_picture_resource_infos[slot_idx].imageViewBinding = r._dst_slot_views[slot_idx];
+        if (!coincident_image_resources)
+        {
+            r._dst_slot_picture_resource_infos[slot_idx].sType = VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR;
+            r._dst_slot_picture_resource_infos[slot_idx].pNext = nullptr;
+            r._dst_slot_picture_resource_infos[slot_idx].codedOffset = VkOffset2D{0, 0};
+            r._dst_slot_picture_resource_infos[slot_idx].codedExtent = VkExtent2D{width, height};
+            r._dst_slot_picture_resource_infos[slot_idx].baseArrayLayer = 0;
+            r._dst_slot_picture_resource_infos[slot_idx].imageViewBinding = r._dst_slot_views[slot_idx];
+        }
     }
-
     return r;
 }
 void DestroyDpbResource(vvb::SysVulkan* sys_vk, Dpb* r)

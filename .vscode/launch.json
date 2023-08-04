@@ -30,7 +30,7 @@
                 // },
                 // {
                 //     "name": "VK_LAYER_SETTINGS_PATH",
-                //     "value": "${env:HOME}/cts/vk_layer_settings.txt"
+                //     "value": "${workspaceFolder}/data/vk_layer_settings.txt"
                 // },
                 {
                     "name": "VK_LAYER_PATH",
@@ -56,7 +56,7 @@
             "request": "launch",
             "program": "${command:cmake.launchTargetPath}",
             // "args": ["-i", "${env:HOME}/video-tests/av1-1-b8-01-size-16x32.ivf", "-c", "1", "--noPresent", "-o", "/tmp/nvidia.yuv"],
-            "args": ["--device-name=amd"],
+            "args": ["--driver-version=23.2.99"],
             "cwd": "${workspaceFolder}/data",
             "env": {
                 // {
@@ -71,7 +71,7 @@
                 //     "name": "VK_INSTANCE_LAYERS",
                 //     "value": ":VK_LAYER_LUNARG_gfxreconstruct",
                 // },
-                "VK_LAYER_SETTINGS_PATH": "${workspaceFolder}/vk_layer_settings.ini",
+                "VK_LAYER_SETTINGS_PATH": "${workspaceFolder}/data/vk_layer_settings.ini",
                 "VK_LAYER_PATH": "${env:HOME}/cts/root/share/vulkan/explicit_layer.d:${env:HOME}/cts/root/etc/vulkan/explicit_layer.d",
                 "LD_LIBRARY_PATH": "${env:HOME}/cts/root/lib:/home/cturner/cts/root/lib/x86_64-linux-gnu"
             },
@@ -84,7 +84,7 @@
             "args": ["--device-name=nvidia"],
             "cwd": "${workspaceFolder}/data",
             "env": {
-                "VK_LAYER_SETTINGS_PATH": "${workspaceFolder}/vk_layer_settings.ini",
+                "VK_LAYER_SETTINGS_PATH": "${workspaceFolder}/data/vk_layer_settings.ini",
                 "VK_LAYER_PATH": "${env:HOME}/cts/root/share/vulkan/explicit_layer.d:${env:HOME}/cts/root/etc/vulkan/explicit_layer.d",
                 "LD_LIBRARY_PATH": "${env:HOME}/cts/root/lib:/home/cturner/cts/root/lib/x86_64-linux-gnu"
             },

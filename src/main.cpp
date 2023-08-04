@@ -23,9 +23,10 @@
 
 int main(int argc, char** argv)
 {
-    bool detect_env = false, enable_validation = true;
+    bool detect_env = false, enable_validation = VK_FALSE;
 	const char* requested_device_name = nullptr;
 	int device_major = -1, device_minor = -1;
+    int driver_major = -1, driver_minor = -1, driver_patch = -1;
 
     for (int arg = 1; arg < argc; arg++) {
         if (util::StrEqual(argv[arg], "--help")) {
@@ -34,8 +35,9 @@ int main(int argc, char** argv)
             printf("  --help: print this message\n");
             printf("  --detect: detect devices and capabilities\n");
             printf("  --validate-api-calls: enable vulkan validation layer (EXTRA SLOW!)\n");
-			printf("  --device-major-minor=<major>.<minor> : select device by major and minor version (hex)\n");
             printf("  --device-name=<name> : case-insentive substring search of the reported device name to select (e.g. nvidia or amd)\n");
+			printf("  --device-major-minor=<major>.<minor> : select device by major and minor version (hex)\n");
+            printf("    --driver-version=<major>.<minor>.<patch> (e.g. 23.2.99): select device by available driver version\n");
 			exit(0);
         } else if (util::StrHasPrefix(argv[arg], "--device-name=")) {
             requested_device_name = util::StrRemovePrefix(argv[arg], "--device-name=");
@@ -48,7 +50,18 @@ int main(int argc, char** argv)
 			major_minor_pair[period_offset] = '\0';
 			ASSERT(util::StrToInt(major_minor_pair.c_str(), 16, device_major));
 			ASSERT(util::StrToInt(major_minor_pair.c_str() + period_offset + 1, 16, device_minor));
+        } else if (util::StrHasPrefix(argv[arg], "--driver-version=")) {
+            std::string whole_version = util::StrRemovePrefix(argv[arg], "--driver-version=");
 
+			int period_minor_offset = util::StrFindIndex(whole_version.c_str(), ".");
+            int period_patch_offset = util::StrFindIndex(whole_version.c_str() + period_minor_offset + 1, ".");
+			ASSERT(period_minor_offset != -1 && period_patch_offset != -1);
+			// convert major and minor to hex
+			whole_version[period_minor_offset] = '\0';
+			ASSERT(util::StrToInt(whole_version.c_str(), 10, driver_major));
+            whole_version[period_minor_offset + period_patch_offset + 1] = '\0';
+			ASSERT(util::StrToInt(whole_version.c_str() + period_minor_offset + 1, 10, driver_minor));
+            ASSERT(util::StrToInt(whole_version.c_str() + period_minor_offset + period_patch_offset + 2, 10, driver_patch));
         } else if (util::StrEqual(argv[arg], "--validate-api-calls")) {
             enable_validation = true;
         } else if (util::StrEqual(argv[arg], "--detect")) {
@@ -64,6 +77,9 @@ int main(int argc, char** argv)
 	opts.requested_device_name = requested_device_name;
 	opts.requested_device_major = device_major;
 	opts.requested_device_minor = device_minor;
+    opts.requested_driver_version_major = driver_major;
+    opts.requested_driver_version_minor = driver_minor;
+    opts.requested_driver_version_patch = driver_patch;
 
 	vvb::SysVulkan* sys_vk = new vvb::SysVulkan(opts);
 	ASSERT(sys_vk);
@@ -311,6 +327,21 @@ int main(int argc, char** argv)
     decode_info.pSetupReferenceSlot = &reference_slot;
     decode_info.referenceSlotCount = 0;
     decode_info.pReferenceSlots = nullptr;
+    if (dpb_and_dst_coincide && decode_info.pSetupReferenceSlot == nullptr)
+    {
+        VkDependencyInfoKHR dpb_to_dst_barrier = {};
+        dpb_to_dst_barrier.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
+        dpb_to_dst_barrier.pNext = nullptr;
+        dpb_to_dst_barrier.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+        dpb_to_dst_barrier.memoryBarrierCount = 0;
+        dpb_to_dst_barrier.pMemoryBarriers = nullptr;
+        dpb_to_dst_barrier.bufferMemoryBarrierCount = 1;
+        dpb_to_dst_barrier.pBufferMemoryBarriers = &bitstream_barrier;
+        std::vector<VkImageMemoryBarrier2> image_barriers = dpb.SlotBarriers(vvb::TRANSITION_IMAGE_DPB_TO_DST, 0u);
+        dpb_to_dst_barrier.imageMemoryBarrierCount = image_barriers.size();
+        dpb_to_dst_barrier.pImageMemoryBarriers = image_barriers.data();
+        vk.CmdPipelineBarrier2KHR(decode_cmd_buf, &dpb_to_dst_barrier);
+    }
     vk.CmdDecodeVideoKHR(decode_cmd_buf, &decode_info);
 
     if (sys_vk->DecodeQueriesAreSupported())
