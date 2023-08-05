@@ -1,17 +1,14 @@
-Decode a single AVC IDR frame for testing purposes.
+Decode a single AVC IDR frame for testing purposes. 
+
+Only tested on Linux, it has a single dynamic dependency on `libvulkan.so`.
 
 # Build the test
-: cmake -B build -S .
+
+    cmake -B build -S .
 
 # Run the test
-For NVIDIA
-: ./build/vvp --device-name=nvidia
 
-For AMD
-: ./build/vvp --device-name=amd
-
-For Intel
-: ./build/vvp --device-name=amd
+    ./build/vvp --device-name=nvidia|amd|intel
 
 You may also use `--device-major-minor=MAJOR.MINOR` to select based on DRM
 properties, or `--driver-version=X.Y.Z` to select based on enabled
